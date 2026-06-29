@@ -80,7 +80,16 @@ own start commands — ataegina does the deconfliction and the bookkeeping.
 ataegina is a single bash file. Installing it never requires `sudo`: it lives
 under your home directory and writes only there.
 
-**One command (recommended).** Works once the repo is public:
+**Homebrew (macOS / Linuxbrew).** Install and upgrade from the tap:
+
+```bash
+brew install noahhyden/tap/ataegina
+```
+
+This installs the `ataegina` binary and an `ate` shortcut; `brew upgrade` picks
+up new releases.
+
+**One command (curl).** No Homebrew required:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noahhyden/ataegina-cli/main/install.sh | sh
