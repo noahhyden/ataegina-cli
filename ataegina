@@ -51,6 +51,7 @@ usage:
   ataegina db [name|url|create|drop]    inspect/manage this tree's database
   ataegina ports                        show this tree's index, ports, urls
   ataegina list                         show all registered worktrees
+  ataegina move N                       relocate this worktree to index N (new ports)
   ataegina prune                        drop registry entries whose tree is gone
   ataegina doctor                       read-only diagnostics for this tree
   ataegina config [list|get|set|unset|path]   read/write ataegina.config.sh keys
@@ -647,7 +648,7 @@ _ate_stop_port() {
     fi
     rm -f "$pidfile"
   fi
-  if [ "$stopped" = 1 ]; then return 0; fi
+  if [ "$stopped" = 1 ]; then echo "$label: stopped on :$port"; return 0; fi
   if ate_port_listening "$port"; then
     echo "$label: something is on :$port but cannot resolve pids with $(ate_port_tool); nothing stopped" >&2
   else
@@ -1989,6 +1990,53 @@ case "$CMD" in
     mv "$tmp" "$REGISTRY"
     log "pruned $removed stale entr$([ "$removed" = 1 ] && echo y || echo ies)"
     ;;
+  move)
+    # Relocate THIS worktree to a different index (and therefore a different
+    # port pair). Useful when the auto-assigned slot's ports are permanently
+    # taken by something ataegina doesn't manage (another tool, a daemon), so
+    # the derived ports can never bind. Without this you'd hand-edit the
+    # registry. The primary is always index 0 and can't be moved.
+    shift
+    target="${1:-}"
+    if [ "$TREE" = "$PRIMARY" ]; then
+      echo "ataegina: the primary checkout is always index 0 and cannot be moved" >&2
+      exit 2
+    fi
+    case "$target" in
+      ''|*[!0-9]*)
+        echo "ataegina: 'move' needs a target index (a non-negative integer), e.g. ataegina move 4" >&2
+        exit 2 ;;
+    esac
+    if [ "$target" = 0 ]; then
+      echo "ataegina: index 0 is reserved for the primary checkout" >&2
+      exit 2
+    fi
+    holder="$(awk -F'\t' -v i="$target" '$1==i{print $2; exit}' "$REGISTRY" 2>/dev/null || true)"
+    if [ -n "$holder" ] && [ "$holder" != "$TREE" ] && [ -d "$holder" ]; then
+      echo "ataegina: index $target is already assigned to $holder" >&2
+      echo "          pick a free index ('ataegina list' shows what's taken), or 'ataegina prune' if it's stale" >&2
+      exit 2
+    fi
+    # Rewrite the registry: drop any line for this tree AND any (stale) line
+    # holding the target index, then append the new mapping.
+    mkdir -p "$(dirname "$REGISTRY")"; touch "$REGISTRY"
+    tmp="$(mktemp)"
+    awk -F'\t' -v p="$TREE" -v i="$target" '$2!=p && $1!=i' "$REGISTRY" > "$tmp"
+    printf '%s\t%s\n' "$target" "$TREE" >> "$tmp"
+    mv "$tmp" "$REGISTRY"
+    newfe=$((FRONT_PORT_BASE + target))
+    newbe=$((BACK_PORT_BASE + target))
+    log "moved this worktree to index #$target  (was #$N)"
+    echo "  frontend: http://localhost:$newfe"
+    echo "  backend:  http://localhost:$newbe"
+    echo "  logs:     ${LOG_DIR_BASE}${target}"
+    for _p in "$newfe" "$newbe"; do
+      if ate_port_listening "$_p"; then
+        echo "  warning: :$_p is already in use by $(ate_port_proc_desc "$_p") - this slot may be occupied too" >&2
+      fi
+    done
+    log "now run 'ataegina down' (frees the old ports), then 'ataegina up' on the new slot"
+    ;;
   doctor)
     # cmd_doctor may return nonzero on a hard [fail]; guard against set -e so we
     # exit with its code rather than aborting mid-function.
@@ -1997,7 +2045,7 @@ case "$CMD" in
     exit "$rc"
     ;;
   *)
-    echo "usage: ataegina [init|up|down|logs|db|ports|list|prune|doctor|config|update] [both|backend|frontend]" >&2
+    echo "usage: ataegina [init|up|down|logs|db|ports|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
     echo "       ataegina --help    for full usage" >&2
     exit 2
     ;;
