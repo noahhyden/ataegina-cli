@@ -1,0 +1,143 @@
+name: CI
+
+# Lint, test on macOS + Linux, prove the macOS run uses system bash 3.2, and
+# verify the release checksum + version/tag agreement. Everything here honors
+# the project's zero-dependency, bash-3.2, no-GNU-only-flags ethos: the only dev
+# dependency installed is bats-core (the test runner) and shellcheck (the
+# linter), both via the runners' package managers.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint: shellcheck the bash launcher and the POSIX-sh installer.
+  #
+  # The launcher deliberately stores deferred-expansion command strings in single
+  # quotes (e.g. 'npx next dev -p $FRONTEND_PORT'), keeps a few intentionally
+  # unused locals, and uses subshell-local exports; those raise SC2016 / SC2034 /
+  # SC2030 / SC2031 / SC2154 / SC2086 / SC2318 and an SC1010 false positive on a
+  # `... 2 done` field assignment. They are excluded so shellcheck stays a real
+  # gate for genuine regressions rather than a wall of known-by-design noise.
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: shellcheck ataegina (bash)
+        run: |
+          shellcheck -s bash \
+            -e SC2016,SC2034,SC2030,SC2031,SC2086,SC2018,SC2019,SC2318,SC1010,SC2154 \
+            ataegina
+      - name: shellcheck install.sh (sh)
+        run: shellcheck -s sh -e SC2016 install.sh
+
+  # ---------------------------------------------------------------------------
+  # Test: the bats-core suite on Linux and macOS. Tests drive a temp registry and
+  # ATE_PORT_TOOL=none, so no servers, databases, or network are needed.
+  # ---------------------------------------------------------------------------
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats-core (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Install bats-core (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core
+      - name: Configure a throwaway git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ate ci"
+      - name: Run the test suite
+        run: bats tests/
+
+  # ---------------------------------------------------------------------------
+  # Assert the macOS job actually exercises the system bash 3.2 (the floor the
+  # project targets). The Homebrew bash 5 is NOT on PATH as `bash` by default on
+  # the macOS runner, but we make the requirement explicit: /bin/bash must be a
+  # 3.x, and a smoke run of the suite under it must pass.
+  # ---------------------------------------------------------------------------
+  macos-bash32:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats-core
+        run: brew install bats-core
+      - name: Assert /bin/bash is 3.x
+        run: |
+          ver="$(/bin/bash -c 'echo "$BASH_VERSION"')"
+          echo "system /bin/bash is $ver"
+          case "$ver" in
+            3.*) echo "ok: system bash is 3.x" ;;
+            *) echo "expected system /bin/bash to be 3.x, got $ver" >&2; exit 1 ;;
+          esac
+      - name: Configure a throwaway git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ate ci"
+      - name: Run the suite under system bash 3.2
+        # bats spawns the test bodies; the `ate` helper invokes `bash "$ATE_SCRIPT"`.
+        # Putting /bin first guarantees that inner `bash` is the 3.2 system one.
+        run: PATH="/bin:$PATH" bats tests/
+
+  # ---------------------------------------------------------------------------
+  # Release verification: the published checksum must match the committed script,
+  # and (on a tag build, or whenever a tag is reachable) the VERSION= line must
+  # match the latest tag. Skips the tag check gracefully when no tag exists.
+  # ---------------------------------------------------------------------------
+  release-verify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need tags for the version<->tag check
+      - name: Checksum matches the committed ataegina
+        run: shasum -a 256 -c ataegina.sha256
+      - name: VERSION matches the latest tag (skipped if no tag)
+        # On a TAG build the agreement is a hard gate: the VERSION= line must
+        # match the tag being released. On non-tag builds (ordinary main pushes /
+        # PRs) the comparison is informational only, because VERSION is bumped in
+        # the commit BEFORE the release tag is cut, so a transient mismatch there
+        # is expected and must not fail CI.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          ver="$(sed -n 's/^VERSION="\{0,1\}\([0-9][^"]*\)"\{0,1\}.*/\1/p' ataegina | head -n1)"
+          echo "script VERSION: $ver"
+          if [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+            echo "release tag build: $tag"
+            if [ "$ver" != "${tag#v}" ]; then
+              echo "VERSION ($ver) does not match the release tag ($tag)" >&2
+              exit 1
+            fi
+            echo "ok: VERSION matches the release tag"
+            exit 0
+          fi
+          tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "$tag" ]; then
+            echo "no git tag reachable; skipping the version<->tag check"
+            exit 0
+          fi
+          echo "latest reachable tag: $tag"
+          if [ "$ver" != "${tag#v}" ]; then
+            echo "note: VERSION ($ver) differs from latest tag ($tag) -- expected between releases (VERSION is bumped before tagging); not failing on a non-tag build"
+          else
+            echo "ok: VERSION matches the latest tag"
+          fi

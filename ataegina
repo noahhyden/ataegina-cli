@@ -1,0 +1,2004 @@
+#!/usr/bin/env bash
+# ataegina - a tiny, zero-dependency harness for running fleets of AI coding
+# agents (or just yourself) across parallel git worktrees without port or
+# database collisions.
+#
+# Each worktree gets a STABLE integer index N, assigned once and persisted in a
+# machine-local registry. From N we derive a non-overlapping port slot:
+#
+#   frontend port = FRONT_PORT_BASE + N   (default 5173 + N)
+#   backend  port = BACK_PORT_BASE  + N   (default 8000 + N)
+#   log dir       = LOG_DIR_BASE + N       (default /tmp/ate-wtN)
+#
+# The primary checkout is index 0; every additional worktree gets the next free
+# slot. The mapping is sticky: the same tree always gets the same ports across
+# runs, so long-lived background agents keep their addresses.
+#
+# It anchors on the worktree you run it FROM ($PWD's git toplevel), exports the
+# derived env, and then invokes YOUR dev-server hooks (configured in
+# ataegina.config.sh). It does not assume any particular stack; the hooks decide
+# what "start the frontend" and "start the backend" mean for your project.
+#
+# Usage:
+#   ataegina init [options]               # detect your stack, write ataegina.config.sh
+#   ataegina up [both|backend|frontend] [--scope X]  # start dev servers (default: both)
+#   ataegina down [both|backend|frontend] # stop dev servers
+#   ataegina ports                        # show this tree's index, ports, urls
+#   ataegina list                         # show all registered worktrees
+#   ataegina prune                        # drop registry entries whose tree is gone
+#   ataegina doctor                       # read-only diagnostics for this tree
+#   ataegina update                       # self-update to the latest published release
+#   ataegina --version                    # print version and exit
+#   ataegina --help                       # print this usage and exit
+#
+# Override the auto-assigned index for one invocation with ATE_INDEX=<n>.
+#
+# Suggested shell alias:  alias ate='ataegina'
+
+set -euo pipefail
+
+VERSION="0.5.0"
+
+usage() {
+  cat <<'EOF'
+ataegina - worktree-aware dev launcher (zero dependencies, pure bash)
+
+usage:
+  ataegina init [options]               detect your stack, write ataegina.config.sh
+  ataegina up [both|backend|frontend] [--scope X]   start dev servers (default: both)
+  ataegina down [both|backend|frontend] stop dev servers
+  ataegina logs [both|backend|frontend] [-n N] [--no-follow]   follow this tree's logs
+  ataegina db [name|url|create|drop]    inspect/manage this tree's database
+  ataegina ports                        show this tree's index, ports, urls
+  ataegina list                         show all registered worktrees
+  ataegina prune                        drop registry entries whose tree is gone
+  ataegina doctor                       read-only diagnostics for this tree
+  ataegina config [list|get|set|unset|path]   read/write ataegina.config.sh keys
+  ataegina update                       self-update to the latest published release
+  ataegina --version | -v               print version and exit
+  ataegina --help | -h                  print this usage and exit
+
+up options:
+  --scope X            force the start scope: frontend|backend|both|none. Without
+                       it, scope is auto-detected from the worktree's git diff
+                       (or read from a `scope:` line in $ATE_TASK_FILE, if set).
+                       Index 0 (the primary) is always both.
+
+init options:
+  --yes, -y            accept all detected values (no prompts; same as CI)
+  --non-interactive    alias for --yes
+  --frontend-dir DIR   force the frontend directory (skip probing)
+  --backend-dir DIR    force the backend directory (skip probing)
+  --force              overwrite an existing ataegina.config.sh
+  --dry-run            print the generated config to stdout, write nothing
+
+config subcommands:
+  list                 (default) print every known key with its effective value,
+                       its source (set in <file> | default | unset), and which
+                       config file is loaded / would be written
+  get KEY              print KEY's effective value
+  set KEY VALUE [--global]   write KEY=VALUE into the config file (replace the
+                       existing top-level assignment, else append). Default target
+                       is the repo-root ataegina.config.sh (created if missing);
+                       --global targets $XDG_CONFIG_HOME/ataegina/ataegina.config.sh;
+                       $ATE_CONFIG wins if set. Values are stored single-quoted so
+                       $VAR stays literal. Only known scalar keys are accepted;
+                       hook functions (ate_start_*) are edited in the file directly.
+  unset KEY            remove KEY's top-level assignment
+  path                 print the config file path get/set/list operate on
+
+env:
+  ATE_INDEX=<n>        force a specific index for one invocation
+  ATE_CONFIG=<path>    use an explicit config file path
+  ATE_REGISTRY_DIR / ATE_REGISTRY   override the registry location
+  ATE_SCOPE_AUTO=0     disable scope auto-detection in `up` (force both)
+  ATE_BASE_BRANCH      base ref scope detection diffs against. Without it, the base
+                       is resolved as: the current branch's upstream (e.g.
+                       origin/dev), else the remote default (origin/HEAD), else the
+                       first local of main/master/develop.
+  ATE_UPDATE_CHECK=1   opt in to a throttled (<=1/24h) "newer version" notice at the
+                       end of `up`. Default off. A single GET to the
+                       public GitHub API; silent on any failure. No other telemetry.
+  ATE_RELEASES_URL     override the releases API URL (for `update`; testing)
+  ATE_RAW_BASE         override the raw-content base URL (for `update`; testing)
+  GH_TOKEN             optional GitHub token, sent as a bearer to the release feed
+
+config keys (set in ataegina.config.sh; see ataegina.config.example.sh):
+  FRONT_PORT_BASE / BACK_PORT_BASE  port bases (default 5173 / 8000)
+  LOG_DIR_BASE / REGISTRY_DIR       log + registry locations
+  FRONTEND_DIR / FRONTEND_CMD / FRONTEND_ENV   declarative frontend
+  BACKEND_DIR  / BACKEND_CMD  / BACKEND_ENV    declarative backend
+  DB_NAME      set to enable per-worktree databases (off when unset)
+  DB_KIND      postgres | mysql | sqlite | custom (default postgres)
+  DB_SUFFIX    worktree DB name = DB_NAME + DB_SUFFIX + N (default _wt)
+  DB_URL_TEMPLATE / DB_URL_VAR   build + inject the per-worktree connection URL
+  DB_AUTO_CREATE   `up` ensures the worktree DB exists (default 1)
+  DB_CREATE_CMD / DB_DROP_CMD    override the per-kind create/drop commands
+EOF
+}
+
+# Top-level flags are honored before anything else (and before requiring a git
+# worktree), so `ataegina --version` works from anywhere.
+case "${1:-}" in
+  --version|-v) echo "ataegina $VERSION"; exit 0 ;;
+  --help|-h)    usage; exit 0 ;;
+  '')           usage; exit 0 ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Defaults (overridable by the config file and/or the environment).
+# ---------------------------------------------------------------------------
+FRONT_PORT_BASE="${FRONT_PORT_BASE:-5173}"
+BACK_PORT_BASE="${BACK_PORT_BASE:-8000}"
+LOG_DIR_BASE="${LOG_DIR_BASE:-/tmp/ate-wt}"
+REGISTRY_DIR="${ATE_REGISTRY_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/ataegina}"
+REGISTRY="${ATE_REGISTRY:-$REGISTRY_DIR/worktree-index}"
+
+# Per-worktree database deconfliction (OFF unless DB_NAME is set, so existing
+# configs are unaffected). When on, each worktree N>0 gets its own database
+# DB_NAME$DB_SUFFIX$N; the primary (index 0) keeps the unsuffixed DB_NAME (your
+# shared dev DB). See the "database" hooks and the exports section below.
+DB_NAME="${DB_NAME:-}"
+DB_KIND="${DB_KIND:-postgres}"      # postgres | mysql | sqlite | custom
+DB_SUFFIX="${DB_SUFFIX:-_wt}"       # worktree DB = DB_NAME + DB_SUFFIX + N
+DB_URL_VAR="${DB_URL_VAR:-DATABASE_URL}"   # env var the URL is injected into
+DB_URL_TEMPLATE="${DB_URL_TEMPLATE:-}"     # e.g. postgres://localhost/$ATE_DB_NAME
+DB_AUTO_CREATE="${DB_AUTO_CREATE:-1}"      # `up` ensures a worktree DB exists
+DB_CREATE_CMD="${DB_CREATE_CMD:-}"  # override the per-kind default create cmd
+DB_DROP_CMD="${DB_DROP_CMD:-}"      # override the per-kind default drop cmd
+
+# Resolve the registry file for THIS repo. The registry is per-repo by default so
+# two unrelated checkouts never share one index space (which would otherwise make
+# both their primaries index 0 -> identical ports, and leak worktree indices
+# across repos). Precedence:
+#   1. $ATE_REGISTRY set  -> use it verbatim (one explicit shared file)
+#   2. else               -> a per-repo file under $REGISTRY_DIR/repos/<key>
+# The key is derived from the PRIMARY checkout's toplevel path: a readable
+# basename prefix plus a portable cksum digest (POSIX; no shasum dependency), so
+# it is stable across runs and filesystem-safe. Requires PRIMARY to be resolved,
+# so it is a function called after the worktree toplevel is known (not at load).
+ate_registry_file() {
+  if [ -n "${ATE_REGISTRY:-}" ]; then
+    printf '%s\n' "$ATE_REGISTRY"
+    return 0
+  fi
+  local key digest base
+  base="$(basename -- "$PRIMARY")"
+  digest="$(printf '%s' "$PRIMARY" | cksum | cut -d' ' -f1)"
+  key="$base-$digest"
+  printf '%s\n' "$REGISTRY_DIR/repos/$key"
+}
+
+# ---------------------------------------------------------------------------
+# Self-update + opt-in version check.
+#
+# `ataegina update` self-replaces this script with the latest published release
+# from GitHub; the opt-in check (ATE_UPDATE_CHECK=1) prints a one-line "newer
+# version available" notice at the end of `up`/`status`, throttled to <=1/24h.
+#
+# Both resolve sources through two overridable bases, so the whole path can be
+# pointed at a local stub for testing:
+#   ATE_RELEASES_URL  the "latest release" JSON feed (default: GitHub API)
+#   ATE_RAW_BASE      base for raw files; the per-tag script is
+#                     <ATE_RAW_BASE>/<tag>/ataegina (default: raw.githubusercontent)
+#
+# Zero new REQUIRED deps: curl OR wget for fetching, shasum OR sha256sum for
+# verification, all auto-detected. No jq; the tiny bits of JSON we need are
+# parsed with grep/sed.
+# ---------------------------------------------------------------------------
+
+ATE_REPO_SLUG="noahhyden/ataegina-cli"
+ATE_RELEASES_URL="${ATE_RELEASES_URL:-https://api.github.com/repos/${ATE_REPO_SLUG}/releases/latest}"
+ATE_RAW_BASE="${ATE_RAW_BASE:-https://raw.githubusercontent.com/${ATE_REPO_SLUG}}"
+
+# Fetch a URL to stdout. Tries curl, then wget. TIMEOUT is in seconds. Returns
+# the fetch tool's exit code; nonzero on any network/HTTP error (curl -f makes
+# HTTP >=400 a failure; wget does so by default). file:// works with both, which
+# is what the local-stub tests lean on. A GH_TOKEN, if set, is sent as a bearer
+# so the (currently private) repo's feed is reachable for the maintainer.
+ate_fetch() {
+  local url="$1" timeout="${2:-20}"
+  if command -v curl >/dev/null 2>&1; then
+    if [ -n "${GH_TOKEN:-}" ]; then
+      curl -fsSL --max-time "$timeout" -H "Authorization: Bearer $GH_TOKEN" "$url" 2>/dev/null
+    else
+      curl -fsSL --max-time "$timeout" "$url" 2>/dev/null
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if [ -n "${GH_TOKEN:-}" ]; then
+      wget -q -T "$timeout" --header="Authorization: Bearer $GH_TOKEN" -O - "$url"
+    else
+      wget -q -T "$timeout" -O - "$url"
+    fi
+  else
+    return 127
+  fi
+}
+
+# Compute the SHA-256 of a file, printing just the lowercase hex digest. Detects
+# shasum (-a 256) then sha256sum. Empty output if neither is available.
+ate_sha256() {
+  local f="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" 2>/dev/null | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" 2>/dev/null | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
+# Resolve the latest published release tag (e.g. v0.2.0) from the feed, on
+# stdout. Parses `"tag_name": "vX.Y.Z"` with grep/sed (no jq). Empty + nonzero on
+# any failure (network, private repo, parse miss).
+ate_latest_tag() {
+  local timeout="${1:-20}" body tag
+  body="$(ate_fetch "$ATE_RELEASES_URL" "$timeout")" || return 1
+  [ -n "$body" ] || return 1
+  tag="$(printf '%s\n' "$body" \
+    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | head -n1 \
+    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
+  [ -n "$tag" ] || return 1
+  printf '%s\n' "$tag"
+}
+
+# Strict semver-ish "greater than": is A > B? Strips a leading v, splits on dots,
+# compares the first three numeric components left to right. Non-numeric / missing
+# components are treated as 0. Returns 0 (true) if A > B, 1 otherwise.
+ate_version_gt() {
+  local a="${1#v}" b="${2#v}" i a_i b_i
+  local oldifs="$IFS"
+  IFS='.'
+  # shellcheck disable=SC2086
+  set -- $a; local a1="${1:-0}" a2="${2:-0}" a3="${3:-0}"
+  # shellcheck disable=SC2086
+  set -- $b; local b1="${1:-0}" b2="${2:-0}" b3="${3:-0}"
+  IFS="$oldifs"
+  for i in "$a1:$b1" "$a2:$b2" "$a3:$b3"; do
+    a_i="${i%%:*}"; b_i="${i##*:}"
+    # Coerce non-numeric to 0 so a malformed component cannot wedge the compare.
+    case "$a_i" in *[!0-9]*|'') a_i=0 ;; esac
+    case "$b_i" in *[!0-9]*|'') b_i=0 ;; esac
+    if [ "$a_i" -gt "$b_i" ]; then return 0; fi
+    if [ "$a_i" -lt "$b_i" ]; then return 1; fi
+  done
+  return 1
+}
+
+# Resolve this running script's own absolute path, following symlinks portably
+# (macOS readlink has no -f, so we walk the chain ourselves). Prefers an
+# installed `ataegina` on PATH, then $0. Prints the resolved path on stdout;
+# nonzero if it cannot be resolved.
+ate_self_path() {
+  local src
+  src="$(command -v ataegina 2>/dev/null)" || src=""
+  [ -n "$src" ] || src="$0"
+  case "$src" in
+    /*) : ;;                       # already absolute
+    */*) src="$(pwd)/$src" ;;      # relative-with-slash: anchor to cwd
+    *) return 1 ;;                 # a bare name we could not locate
+  esac
+  # Walk the symlink chain (bounded, to avoid an infinite loop).
+  local i=0 link dir
+  while [ -L "$src" ] && [ "$i" -lt 40 ]; do
+    link="$(readlink "$src")" || break
+    case "$link" in
+      /*) src="$link" ;;
+      *)  dir="$(dirname "$src")"; src="$dir/$link" ;;
+    esac
+    i=$((i + 1))
+  done
+  [ -e "$src" ] || return 1
+  printf '%s\n' "$src"
+}
+
+# `ataegina update`: fetch the latest release, verify it, and atomically replace
+# this script. Self-contained; logs through the caller's $UPDATE_LOG prefix.
+ate_update() {
+  local self latest tmp shafile want_sha got_sha bak
+  local say
+  say() { printf "\033[1;35m[ate]\033[0m %s\n" "$*"; }
+
+  self="$(ate_self_path)" || {
+    say "update: cannot resolve this script's own path; update manually." >&2
+    return 1
+  }
+  if [ ! -w "$self" ]; then
+    say "update: $self is not writable; re-run with the right permissions or update manually." >&2
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    say "update: need curl or wget to fetch releases; neither found." >&2
+    return 1
+  fi
+
+  latest="$(ate_latest_tag 20)" || {
+    say "update: could not reach the release feed; the repo may be private, or set GH_TOKEN." >&2
+    return 1
+  }
+
+  if ! ate_version_gt "$latest" "$VERSION"; then
+    say "already on the latest version ($VERSION)"
+    return 0
+  fi
+
+  tmp="$(mktemp)" || { say "update: could not create a temp file." >&2; return 1; }
+  if ! ate_fetch "$ATE_RAW_BASE/$latest/ataegina" 60 > "$tmp"; then
+    rm -f "$tmp"
+    say "update: failed to download $latest; aborting (your install is untouched)." >&2
+    return 1
+  fi
+  if [ ! -s "$tmp" ]; then
+    rm -f "$tmp"
+    say "update: downloaded an empty file; aborting." >&2
+    return 1
+  fi
+
+  # SHA-256 verification, if a checksum is published. <tag>/ataegina.sha256 is a
+  # single line "HEX  ataegina". A 404/empty means none published -> warn + skip.
+  shafile="$(mktemp)" || { rm -f "$tmp"; say "update: could not create a temp file." >&2; return 1; }
+  if ate_fetch "$ATE_RAW_BASE/$latest/ataegina.sha256" 30 > "$shafile" 2>/dev/null && [ -s "$shafile" ]; then
+    want_sha="$(awk '{print $1; exit}' "$shafile")"
+    got_sha="$(ate_sha256 "$tmp")" || got_sha=""
+    if [ -z "$got_sha" ]; then
+      rm -f "$tmp" "$shafile"
+      say "update: no shasum/sha256sum tool to verify the download; aborting." >&2
+      return 1
+    fi
+    if [ "$want_sha" != "$got_sha" ]; then
+      rm -f "$tmp" "$shafile"
+      say "update: CHECKSUM MISMATCH (expected $want_sha, got $got_sha); aborting, not installing." >&2
+      return 1
+    fi
+  else
+    say "WARN: no published checksum, skipping verification"
+  fi
+  rm -f "$shafile"
+
+  # Sanity: the download must parse as bash before we trust it.
+  if ! bash -n "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    say "update: the downloaded script does not parse (bash -n failed); aborting." >&2
+    return 1
+  fi
+
+  # Atomic-ish replace: back up the current script, then mv the verified temp
+  # over the real path (same filesystem if mktemp's TMPDIR allows; mv falls back
+  # to copy+unlink otherwise, which is still safe given the backup).
+  bak="$self.bak"
+  if ! cp -p "$self" "$bak" 2>/dev/null; then
+    rm -f "$tmp"
+    say "update: could not back up $self to $bak; aborting." >&2
+    return 1
+  fi
+  chmod +x "$tmp" 2>/dev/null || true
+  if ! mv "$tmp" "$self" 2>/dev/null; then
+    # mv across filesystems can fail mid-flight; restore from the backup.
+    cp -p "$bak" "$self" 2>/dev/null || true
+    rm -f "$tmp"
+    say "update: failed to install the new script; restored from backup." >&2
+    return 1
+  fi
+  say "updated $VERSION -> $latest"
+  say "rollback if needed:  mv $bak $self"
+  return 0
+}
+
+# Opt-in throttled version check. Runs at the END of `up` and `status` ONLY when
+# ATE_UPDATE_CHECK is truthy. At most once per 24h (tracked by a timestamp file).
+# Offline-safe and SILENT on any failure: a short fetch timeout, and any error
+# (no network, private repo, parse fail) produces no output and never changes the
+# caller's exit status. A single GET to the public GitHub API; no other telemetry.
+ate_version_check_notice() {
+  case "${ATE_UPDATE_CHECK:-0}" in
+    1|true|yes|on) : ;;
+    *) return 0 ;;
+  esac
+  local stamp now last tag
+  stamp="$REGISTRY_DIR/.update-check"
+  now="$(date +%s 2>/dev/null)" || return 0
+  if [ -f "$stamp" ]; then
+    last="$(cat "$stamp" 2>/dev/null)" || last=""
+    case "$last" in
+      ''|*[!0-9]*) last=0 ;;
+    esac
+    # 24h = 86400s. Throttle: skip if the last check was within the window.
+    if [ "$last" -gt 0 ] && [ "$((now - last))" -lt 86400 ]; then
+      return 0
+    fi
+  fi
+  # Record the attempt up front so a hanging/erroring check still respects the
+  # throttle (we do not want to retry the network on every command).
+  mkdir -p "$REGISTRY_DIR" 2>/dev/null || true
+  printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
+  # Short timeout; swallow every error.
+  tag="$(ate_latest_tag 3 2>/dev/null)" || return 0
+  [ -n "$tag" ] || return 0
+  if ate_version_gt "$tag" "$VERSION"; then
+    printf '[ate] a newer version is available (%s); run: ataegina update\n' "$tag"
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Port detection backend. lsof is the classic probe but is frequently missing
+# on minimal Debian/Ubuntu. So we abstract "is this port up / who holds it"
+# behind a small tool layer with several interchangeable backends, auto-detected
+# once and memoized. Define these BEFORE the hooks below, because the default
+# stop hooks call them.
+#
+# Backends, in auto-detect preference order: lsof, ss (iproute2), fuser, proc
+# (parse /proc/net/tcp*, listening-detection only), else none. Override with
+# ATE_PORT_TOOL=lsof|ss|fuser|proc|none.
+# ---------------------------------------------------------------------------
+
+# Resolve which port backend to use, once, and cache it in _ATE_PORT_TOOL.
+# Honors an explicit ATE_PORT_TOOL override (validated; an unknown/unavailable
+# value falls through to auto-detect). Echoes the resolved tool name.
+_ATE_PORT_TOOL=""
+ate_port_tool() {
+  if [ -n "$_ATE_PORT_TOOL" ]; then printf '%s\n' "$_ATE_PORT_TOOL"; return 0; fi
+  local want="${ATE_PORT_TOOL:-}"
+  case "$want" in
+    lsof|ss|fuser|proc|none)
+      # Honor the override only if the tool is actually usable; otherwise we
+      # would silently mis-probe. none and proc need no external binary.
+      case "$want" in
+        lsof)  command -v lsof  >/dev/null 2>&1 && _ATE_PORT_TOOL="lsof" ;;
+        ss)    command -v ss    >/dev/null 2>&1 && _ATE_PORT_TOOL="ss" ;;
+        fuser) command -v fuser >/dev/null 2>&1 && _ATE_PORT_TOOL="fuser" ;;
+        proc)  _ATE_PORT_TOOL="proc" ;;
+        none)  _ATE_PORT_TOOL="none" ;;
+      esac
+      ;;
+  esac
+  if [ -z "$_ATE_PORT_TOOL" ]; then
+    # Auto-detect: lsof, then ss, then fuser, then proc (if /proc/net/tcp is
+    # readable), else none.
+    if command -v lsof >/dev/null 2>&1; then
+      _ATE_PORT_TOOL="lsof"
+    elif command -v ss >/dev/null 2>&1; then
+      _ATE_PORT_TOOL="ss"
+    elif command -v fuser >/dev/null 2>&1; then
+      _ATE_PORT_TOOL="fuser"
+    elif [ -r /proc/net/tcp ]; then
+      _ATE_PORT_TOOL="proc"
+    else
+      _ATE_PORT_TOOL="none"
+    fi
+  fi
+  printf '%s\n' "$_ATE_PORT_TOOL"
+}
+
+# Parse /proc/net/tcp and /proc/net/tcp6 for a LISTEN socket (state 0A) on the
+# given decimal local port. Returns 0 if found, 1 otherwise. Linux-only; the
+# files simply will not exist elsewhere, in which case we return 1.
+_ate_proc_listening() {
+  local port="$1" f hexport line lp st
+  # Upper-case hex, zero-padded to 4 (the local_address column is HOST:PORT in
+  # uppercase hex). printf gives us a portable 16#-free encoding.
+  hexport="$(printf '%04X' "$port" 2>/dev/null)" || return 1
+  for f in /proc/net/tcp /proc/net/tcp6; do
+    [ -r "$f" ] || continue
+    # Columns: sl local_address rem_address st ...  local_address is HEX:HEX.
+    # We want st == 0A (LISTEN) and the local port half == hexport.
+    while read -r line; do
+      # Skip the header row (starts with "sl").
+      case "$line" in
+        ''|*sl*local_address*) continue ;;
+      esac
+      # Field 2 is local_address (IP:PORT in hex), field 4 is st.
+      set -- $line
+      [ "$#" -ge 4 ] || continue
+      lp="${2##*:}"   # the PORT half of local_address
+      st="$4"
+      if [ "$st" = "0A" ] && [ "$lp" = "$hexport" ]; then
+        return 0
+      fi
+    done < "$f"
+  done
+  return 1
+}
+
+# ate_port_listening PORT -> 0 if something is LISTENing on the TCP port, else 1.
+# With the 'none' backend we cannot tell, so we report "not listening" (1): that
+# keeps `up` starting servers; callers warn about the degraded check separately.
+ate_port_listening() {
+  local port="$1" tool
+  tool="$(ate_port_tool)"
+  case "$tool" in
+    lsof)
+      lsof -ti tcp:"$port" >/dev/null 2>&1
+      ;;
+    ss)
+      # -H (no header) is newer ss; if it is rejected, parse without it and drop
+      # the header line ourselves. Either way, any matching row means listening.
+      local out
+      out="$(ss -ltnH "sport = :$port" 2>/dev/null)" \
+        || out="$(ss -ltn "sport = :$port" 2>/dev/null | grep -v 'State.*Recv-Q')"
+      [ -n "$out" ]
+      ;;
+    fuser)
+      [ -n "$(fuser "$port"/tcp 2>/dev/null)" ]
+      ;;
+    proc)
+      _ate_proc_listening "$port"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# ate_port_pids PORT -> print the pid(s) holding the port (space/newline
+# separated), empty if none or if the backend cannot map pids. proc/none cannot
+# cheaply map pids, so they return empty.
+ate_port_pids() {
+  local port="$1" tool
+  tool="$(ate_port_tool)"
+  case "$tool" in
+    lsof)
+      lsof -ti tcp:"$port" 2>/dev/null || true
+      ;;
+    ss)
+      # ss -p emits  users:(("name",pid=1234,fd=7))  -- pull out each pid=N.
+      ss -ltnpH "sport = :$port" 2>/dev/null \
+        | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true
+      ;;
+    fuser)
+      # fuser prints the pids (it puts process info on stderr); normalize spaces.
+      fuser "$port"/tcp 2>/dev/null | tr -s ' ' ' ' | sed 's/^ *//;s/ *$//' || true
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+# ate_port_proc_desc PORT -> best-effort "pid (command)" string for doctor's
+# neutral "in use by ..." line. Degrades to just the pid, or to a clear
+# "(pid unknown)" when the backend cannot resolve pids.
+ate_port_proc_desc() {
+  local port="$1" pid cmd
+  pid="$(ate_port_pids "$port" | head -n1 || true)"
+  if [ -z "$pid" ]; then
+    echo "(pid unknown)"
+    return 0
+  fi
+  cmd="$(ps -p "$pid" -o comm= 2>/dev/null | sed 's/^ *//' || true)"
+  if [ -n "$cmd" ]; then
+    echo "pid $pid ($cmd)"
+  else
+    echo "pid $pid"
+  fi
+}
+
+# Hooks. These DEFAULT implementations consume the declarative config vars
+# (FRONTEND_DIR/CMD/ENV, BACKEND_DIR/CMD/ENV) so most users never write bash.
+# They are defined BEFORE the config is sourced, so a user who defines their own
+# ate_start_frontend / ate_start_backend (or the stop hooks) in the config
+# OVERRIDES the default. That power-user escape hatch is intentional; keep it.
+#
+# Each hook runs with the resolved env already exported (FRONTEND_PORT,
+# BACKEND_PORT, BACKEND_URL, FRONTEND_URL, FRONTEND_API_BASE_URL, REPO_ROOT,
+# DEV_LOG_DIR, ATE_INDEX). A *_CMD is a command string that may reference
+# $FRONTEND_PORT, $BACKEND_PORT, $BACKEND_URL, $FRONTEND_URL etc.; it is evaluated
+# by `sh -c` with those vars exported into its environment. A *_ENV is optional
+# extra KEY=VALUE assignments (one per line or semicolon-separated) exported
+# before the command runs, and may itself reference those vars -- this is how you
+# remap to whatever names YOUR app reads, e.g. NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL.
+# ataegina injects these into the process ENVIRONMENT; it never rewrites a .env
+# file. Whether the injected value wins over a committed .env depends on your
+# framework's precedence (Next.js: real env > .env.local; python-dotenv: env wins
+# unless load_dotenv(override=True)).
+ate_start_backend() {
+  [ -n "${BACKEND_CMD:-}" ] || { echo "ataegina: no backend configured (run: ataegina init)" >&2; return 1; }
+  cd "$REPO_ROOT/${BACKEND_DIR:-.}" || return 1
+  if ate_port_listening "$BACKEND_PORT"; then echo "backend  already up on :$BACKEND_PORT"; return 0; fi
+  ( export PORT="$BACKEND_PORT" BACKEND_PORT FRONTEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
+    # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
+    # single export covers every assignment (and each value gets exported into
+    # the child sh -c, not just set in this subshell).
+    [ -n "${BACKEND_ENV:-}" ] && eval "export $(printf '%s' "$BACKEND_ENV" | tr '\n;' '  ')"
+    nohup sh -c "$BACKEND_CMD" > "$DEV_LOG_DIR/backend.log" 2>&1 &
+    # Record the launched pid so `down` can stop it even before it binds the port
+    # (dependency sync / first compile) — port-only teardown misses that window.
+    echo $! > "$DEV_LOG_DIR/backend.pid"
+    disown )
+  echo "backend  -> $BACKEND_URL  (log: $DEV_LOG_DIR/backend.log)"
+}
+
+ate_start_frontend() {
+  [ -n "${FRONTEND_CMD:-}" ] || { echo "ataegina: no frontend configured (run: ataegina init)" >&2; return 1; }
+  cd "$REPO_ROOT/${FRONTEND_DIR:-.}" || return 1
+  if ate_port_listening "$FRONTEND_PORT"; then echo "frontend already up on :$FRONTEND_PORT"; return 0; fi
+  ( export PORT="$FRONTEND_PORT" FRONTEND_PORT BACKEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
+    # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
+    # single export covers every assignment (and each value gets exported into
+    # the child sh -c, not just set in this subshell).
+    [ -n "${FRONTEND_ENV:-}" ] && eval "export $(printf '%s' "$FRONTEND_ENV" | tr '\n;' '  ')"
+    nohup sh -c "$FRONTEND_CMD" > "$DEV_LOG_DIR/frontend.log" 2>&1 &
+    # Record the launched pid so `down` can stop it even before it binds the port
+    # (dependency install / first compile) — port-only teardown misses that window.
+    echo $! > "$DEV_LOG_DIR/frontend.pid"
+    disown )
+  echo "frontend -> http://localhost:$FRONTEND_PORT  (log: $DEV_LOG_DIR/frontend.log)"
+}
+
+# Kill whatever holds a port. Pids come from the resolved port backend; when it
+# cannot map pids (proc/none, or nothing listening) we say so instead of failing.
+_ate_stop_port() {
+  local label="$1" port="$2" pids stopped=0
+  pids="$(ate_port_pids "$port")"
+  if [ -n "$pids" ]; then
+    printf '%s\n' "$pids" | xargs kill 2>/dev/null || true
+    stopped=1
+  fi
+  # Also stop a process WE launched (pid recorded at `up`) that may not be holding
+  # the port: still installing/compiling, bound a different interface, or crashed
+  # leaving a child. This is what keeps orphans from surviving `down`.
+  local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid
+  if [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ]; then
+    lpid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
+      kill "$lpid" 2>/dev/null || true
+      stopped=1
+    fi
+    rm -f "$pidfile"
+  fi
+  if [ "$stopped" = 1 ]; then return 0; fi
+  if ate_port_listening "$port"; then
+    echo "$label: something is on :$port but cannot resolve pids with $(ate_port_tool); nothing stopped" >&2
+  else
+    echo "$label: nothing to stop on :$port" >&2
+  fi
+}
+ate_stop_backend()  { _ate_stop_port "backend"  "$BACKEND_PORT"; }
+ate_stop_frontend() { _ate_stop_port "frontend" "$FRONTEND_PORT"; }
+
+# After `up` launches a server, briefly poll its port so we can tell the user
+# whether it actually came up — instead of fire-and-forget that prints a URL for
+# a server that is still starting (or already dead). We do NOT block on slow
+# first runs (dependency sync, initial compile); we point at the log instead.
+ate_report_ready() {
+  local label="$1" port="$2" url="$3" i=0
+  while [ "$i" -lt 8 ]; do
+    if ate_port_listening "$port"; then
+      log "  $label ready -> $url"
+      return 0
+    fi
+    sleep 1; i=$((i + 1))
+  done
+  log "  $label still starting on :$port (first run can be slow) — tail: ${DEV_LOG_DIR:-?}/$label.log"
+  return 0
+}
+
+# Database hooks. Like the start hooks, these DEFAULT implementations are defined
+# before the config is sourced, so a user who defines ate_db_create / ate_db_drop
+# in the config OVERRIDES them (e.g. to call `neon branches create`, a migration,
+# or a provider API instead of a local engine). ATE_DB_NAME is exported before
+# they run. The whole feature is inert unless DB_NAME is set in the config.
+
+# The per-DB_KIND default create|drop command string (fed to sh -c). Empty for an
+# unknown kind, which forces the user to supply DB_CREATE_CMD/DB_DROP_CMD.
+ate_db_default_cmd() {  # $1 = create|drop
+  case "$DB_KIND" in
+    postgres|postgresql|pg)
+      if [ "$1" = create ]; then echo 'createdb "$ATE_DB_NAME"'
+      else echo 'dropdb --if-exists "$ATE_DB_NAME"'; fi ;;
+    mysql|mariadb)
+      if [ "$1" = create ]; then echo 'mysql -e "CREATE DATABASE IF NOT EXISTS \`$ATE_DB_NAME\`"'
+      else echo 'mysql -e "DROP DATABASE IF EXISTS \`$ATE_DB_NAME\`"'; fi ;;
+    sqlite|sqlite3)
+      # ATE_DB_NAME is a per-worktree file path: nothing to create (opened on
+      # first use); drop removes the file plus any WAL/SHM siblings.
+      if [ "$1" = create ]; then echo ':'
+      else echo 'rm -f "$ATE_DB_NAME" "$ATE_DB_NAME"-wal "$ATE_DB_NAME"-shm'; fi ;;
+    *) echo '' ;;
+  esac
+}
+
+ate_db_create() {
+  local cmd="${DB_CREATE_CMD:-$(ate_db_default_cmd create)}"
+  [ -n "$cmd" ] || { echo "ataegina: no DB create command for DB_KIND='$DB_KIND' (set DB_CREATE_CMD or define ate_db_create)" >&2; return 1; }
+  ( export ATE_DB_NAME ATE_INDEX REPO_ROOT; sh -c "$cmd" )
+}
+ate_db_drop() {
+  local cmd="${DB_DROP_CMD:-$(ate_db_default_cmd drop)}"
+  [ -n "$cmd" ] || { echo "ataegina: no DB drop command for DB_KIND='$DB_KIND' (set DB_DROP_CMD or define ate_db_drop)" >&2; return 1; }
+  ( export ATE_DB_NAME ATE_INDEX REPO_ROOT; sh -c "$cmd" )
+}
+
+# Best-effort idempotent create, called by `up` before the backend starts. Skips
+# the primary (index 0 uses the shared base DB) and is NON-FATAL: if the DB
+# already exists or the engine CLI is missing, it logs and lets the stack come up.
+ate_db_ensure() {
+  [ -n "${DB_NAME:-}" ] || return 0
+  [ "$N" != 0 ] || return 0
+  [ "${DB_AUTO_CREATE:-1}" = 1 ] || return 0
+  if ate_db_create >/dev/null 2>&1; then
+    log "  db ready -> $ATE_DB_NAME"
+  else
+    log "  db $ATE_DB_NAME (exists, or create skipped — run: ataegina db create)"
+  fi
+}
+
+# `ataegina db [name|url|create|drop]` — inspect/manage THIS worktree's database.
+cmd_db() {
+  [ -n "${DB_NAME:-}" ] || { echo "ataegina: no database configured (set DB_NAME in ataegina.config.sh)" >&2; exit 1; }
+  local sub="${1:-name}"
+  case "$sub" in
+    name) printf '%s\n' "$ATE_DB_NAME" ;;
+    url)
+      [ -n "${DB_URL_TEMPLATE:-}" ] || { echo "ataegina db: no DB_URL_TEMPLATE set (only ATE_DB_NAME is derived)" >&2; exit 1; }
+      eval "printf '%s\n' \"$DB_URL_TEMPLATE\"" ;;
+    create)
+      log "creating db $ATE_DB_NAME  (#$N, $DB_KIND)"
+      ate_db_create ;;
+    drop)
+      [ "$N" != 0 ] || { echo "ataegina db drop: refusing to drop the PRIMARY's database ($ATE_DB_NAME) — that's your shared dev DB. Drop it by hand if you really mean to." >&2; exit 1; }
+      log "dropping db $ATE_DB_NAME  (#$N, $DB_KIND)"
+      ate_db_drop ;;
+    *) echo "ataegina db: unknown subcommand '$sub' (name|url|create|drop)" >&2; exit 2 ;;
+  esac
+}
+
+# Stream THIS worktree's server logs in real time. `up` runs servers detached
+# (so they survive across invocations and across worktrees), so the log files are
+# the source of truth — this command just follows them.
+#
+# Scope is the whole answer to "8 worktrees would go wack": like every other
+# command, `logs` is anchored on $PWD's worktree, so it only ever follows the two
+# logs of the tree you are standing in. To watch another tree, cd there and run
+# `ate logs` (one terminal per worktree). A single target (`logs backend`) follows
+# one file directly for a clean Ctrl-C; `both` multiplexes with [be]/[fe] prefixes.
+cmd_logs() {
+  local target="both" lines=60 follow=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      both|backend|frontend) target="$1" ;;
+      -n)            lines="${2:-60}"; shift ;;
+      -n*)           lines="${1#-n}" ;;
+      --no-follow|-F) follow=0 ;;
+      *) echo "ataegina logs: unknown argument '$1' (both|backend|frontend, -n N, --no-follow)" >&2; exit 2 ;;
+    esac
+    shift
+  done
+  local be_log="$LOG_DIR/backend.log" fe_log="$LOG_DIR/frontend.log" fflag=""
+  [ "$follow" = 1 ] && fflag="-f"
+
+  # Collect the file(s) to tail. `both` over multiple files makes tail print its
+  # own `==> file <==` banner when the active stream switches, which separates the
+  # two without us juggling background `tail | sed` pipelines (those orphan their
+  # tails when a log is idle on Ctrl-C). One `tail` process means `exec` hands it
+  # the terminal directly: Ctrl-C kills it cleanly, nothing left behind.
+  local files=""
+  case "$target" in
+    backend)
+      [ -f "$be_log" ] || { echo "ataegina: no backend log yet ($be_log) — run: ataegina up" >&2; exit 1; }
+      files="$be_log"
+      ;;
+    frontend)
+      [ -f "$fe_log" ] || { echo "ataegina: no frontend log yet ($fe_log) — run: ataegina up" >&2; exit 1; }
+      files="$fe_log"
+      ;;
+    both)
+      [ -f "$be_log" ] && files="$be_log"
+      [ -f "$fe_log" ] && files="$files${files:+ }$fe_log"
+      [ -n "$files" ] || { echo "ataegina: no logs yet for worktree #$N ($LOG_DIR) — run: ataegina up" >&2; exit 1; }
+      ;;
+  esac
+  log "tailing #$N  ${files}  $([ "$follow" = 1 ] && echo '(Ctrl-C to stop)')"
+  # shellcheck disable=SC2086
+  exec tail -n "$lines" $fflag $files
+}
+
+# ---------------------------------------------------------------------------
+# Scope detection (used by `up`). Classify what surface a worktree's task
+# touches so `up` can start only what is needed and point the rest at the
+# shared default servers in the primary checkout (frontend :FRONT_PORT_BASE,
+# backend :BACK_PORT_BASE). See the "Scope-aware startup" README section.
+# ---------------------------------------------------------------------------
+
+# ate_task_scope WORKTREE BASE_REF FRONTEND_DIR BACKEND_DIR -> frontend|backend|both|none
+#
+# Classify every changed path (committed since the base + staged + unstaged +
+# untracked) into FE / BE / OTHER buckets by prefix match. Conservative rule:
+#   - any OTHER path (outside both dirs)  -> both   (shared libs, schema, config)
+#   - FE paths only                       -> frontend
+#   - BE paths only                       -> backend
+#   - FE and BE both touched, no OTHER    -> both
+#   - nothing changed                     -> none
+ate_task_scope() {
+  local wt="$1" base="$2" fe_dir="$3" be_dir="$4"
+  # Normalize dir prefixes: strip leading/trailing slashes, force ONE trailing
+  # slash so that 'app/' never prefix-matches 'apps/web/'. Empty dir => an
+  # unmatchable sentinel so it never hits.
+  local fe be
+  fe="${fe_dir#/}"; fe="${fe%/}"
+  be="${be_dir#/}"; be="${be%/}"
+  [ -n "$fe" ] && fe="$fe/" || fe=$'\x01'
+  [ -n "$be" ] && be="$be/" || be=$'\x01'
+
+  # Resolve the diff base. Prefer the merge-base with the base ref so we only see
+  # what THIS branch added, not everything base accumulated since the fork. Fall
+  # back to the raw ref, then to empty (compare working tree to HEAD only).
+  local mb=""
+  if [ -n "$base" ]; then
+    mb="$(git -C "$wt" merge-base "$base" HEAD 2>/dev/null || true)"
+    [ -z "$mb" ] && git -C "$wt" rev-parse --verify -q "$base" >/dev/null 2>&1 && mb="$base"
+  fi
+
+  # Three cheap samples: committed since base, tracked working changes (staged +
+  # unstaged via diff HEAD), and untracked files (which diff HEAD misses).
+  local paths
+  paths="$(
+    { [ -n "$mb" ] && git -C "$wt" diff --name-only "$mb"..HEAD 2>/dev/null
+      git -C "$wt" diff --name-only HEAD 2>/dev/null
+      git -C "$wt" ls-files --others --exclude-standard 2>/dev/null
+    } | sort -u
+  )"
+  [ -z "$paths" ] && { echo none; return 0; }
+
+  local saw_fe=0 saw_be=0 saw_other=0 p
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    case "$p/" in
+      "$fe"*) saw_fe=1 ;;
+      "$be"*) saw_be=1 ;;
+      *)      saw_other=1 ;;
+    esac
+  done <<EOF
+$paths
+EOF
+
+  # Conservative: anything outside both dirs forces 'both'; FE+BE both is 'both'.
+  if [ "$saw_other" = 1 ]; then echo both; return 0; fi
+  if [ "$saw_fe" = 1 ] && [ "$saw_be" = 1 ]; then echo both; return 0; fi
+  if [ "$saw_fe" = 1 ]; then echo frontend; return 0; fi
+  if [ "$saw_be" = 1 ]; then echo backend; return 0; fi
+  echo none
+}
+
+# Resolve the trunk to diff against when ATE_BASE_BRANCH is unset: the first of
+# main / master / develop that exists in this worktree. Empty if none do.
+ate_default_trunk() {
+  local wt="$1" b
+  for b in main master develop; do
+    if git -C "$wt" rev-parse --verify -q "$b" >/dev/null 2>&1; then echo "$b"; return 0; fi
+  done
+  echo ""
+}
+
+# Resolve the base ref scope detection should diff against. Repos whose
+# integration branch is not main/master/develop (e.g. prod is `main`, integration
+# is `dev`) would otherwise get the wrong base and an unreliable scope, so we
+# resolve in this precedence (first hit wins), echoing the chosen ref:
+#   1. $ATE_BASE_BRANCH                         (explicit override)
+#   2. the current branch's upstream            (e.g. origin/dev via @{upstream})
+#   3. the remote default branch                (refs/remotes/origin/HEAD -> origin/X)
+#   4. first local of main / master / develop   (ate_default_trunk)
+# Empty if none resolve (caller then compares the working tree only).
+ate_scope_base() {
+  local wt="$1" base ref
+  # 1. explicit override.
+  if [ -n "${ATE_BASE_BRANCH:-}" ]; then
+    printf '%s\n' "$ATE_BASE_BRANCH"
+    return 0
+  fi
+  # 2. the current branch's upstream (tracking ref), e.g. origin/dev.
+  base="$(git -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  if [ -n "$base" ]; then
+    printf '%s\n' "$base"
+    return 0
+  fi
+  # 3. the remote default branch from origin/HEAD, e.g.
+  #    refs/remotes/origin/dev -> origin/dev.
+  ref="$(git -C "$wt" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [ -n "$ref" ]; then
+    # Strip refs/remotes/ to get origin/<branch>.
+    base="${ref#refs/remotes/}"
+    if [ -n "$base" ]; then printf '%s\n' "$base"; return 0; fi
+  fi
+  # 4. first local of main / master / develop.
+  ate_default_trunk "$wt"
+}
+
+# Read a `scope:` field from the front matter of the markdown file named by
+# $ATE_TASK_FILE (an optional per-run scope override). Echoes one of
+# frontend|backend|both|none, or empty if absent/unrecognized. Tolerates a
+# leading `--- ... ---` YAML-ish block and a bare leading `scope: X` line. No
+# YAML dependency; same grep/sed idiom the rest of the script uses.
+ate_task_scope_field() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  grep -oiE '^scope:[[:space:]]*(frontend|backend|both|none)' "$f" 2>/dev/null \
+    | head -n1 | sed -E 's/^scope:[[:space:]]*//I' | tr 'A-Z' 'a-z'
+}
+
+# ate_port_listening / ate_port_pids / ate_port_proc_desc live near the top of
+# the file (the default stop hooks call them); the scope-aware `up` liveness
+# check below uses the same ate_port_listening.
+
+# ---------------------------------------------------------------------------
+# Load config. Search, in order: $ATE_CONFIG, the repo root, then the registry
+# dir. First hit wins. The file is sourced, so it can set the vars above and
+# define the hook functions.
+# ---------------------------------------------------------------------------
+load_config() {
+  local tree="$1" candidate
+  for candidate in \
+    "${ATE_CONFIG:-}" \
+    "$tree/ataegina.config.sh" \
+    "$REGISTRY_DIR/ataegina.config.sh"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+      # shellcheck disable=SC1090
+      . "$candidate"
+      ATE_CONFIG_LOADED="$candidate"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# init: detect the stack and write a declarative ataegina.config.sh. Interactive
+# by default (confirm each detected value, empty input accepts the default);
+# --yes / --non-interactive / a non-tty stdin skip the prompts and accept the
+# detected values, for scripting and CI.
+# ---------------------------------------------------------------------------
+
+# Read scripts.dev out of a package.json without a JSON parser. Pure sed/grep:
+# find the "scripts" object's "dev" key value. Good enough for the common shape.
+pkg_dev_script() {
+  local pkg="$1"
+  [ -f "$pkg" ] || return 1
+  # Pull the value of the first "dev": "..." line. Handles escaped quotes loosely.
+  # No "dev" script is normal (a CLI/library package.json); grep then exits 1,
+  # which under `set -o pipefail` would fail the surrounding `dev="$(...)"`
+  # assignment and abort init via `set -e`. The trailing `|| true` keeps a
+  # no-match an empty-but-successful result, which the caller already handles.
+  grep -oE '"dev"[[:space:]]*:[[:space:]]*"[^"]*"' "$pkg" 2>/dev/null \
+    | head -n1 | sed -E 's/.*"dev"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true
+}
+
+# Does package.json declare a (dev)dependency on NAME?
+pkg_has_dep() {
+  local pkg="$1" name="$2"
+  [ -f "$pkg" ] || return 1
+  grep -qE "\"$name\"[[:space:]]*:" "$pkg"
+}
+
+# Prompt with a default; in non-interactive mode just echo the default.
+ask() {
+  local prompt="$1" default="$2" reply
+  if [ "${INIT_INTERACTIVE:-1}" != "1" ]; then echo "$default"; return; fi
+  read -r -p "$prompt [$default]: " reply </dev/tty || { echo "$default"; return; }
+  echo "${reply:-$default}"
+}
+
+# Detect the frontend. Sets FE_DIR FE_KIND FE_CMD FE_ENV FE_NOTE (globals).
+detect_frontend() {
+  FE_DIR="" FE_KIND="" FE_CMD="" FE_ENV="" FE_NOTE=""
+  local dirs d pkg dev
+  # Prefer a conventional subdir over the repo root: a dedicated frontend/ dir is
+  # a stronger signal than a package.json at the root (which may belong to tooling
+  # or a monorepo wrapper). The root is the last resort.
+  if [ -n "${INIT_FRONTEND_DIR:-}" ]; then dirs="$INIT_FRONTEND_DIR"; else
+    dirs="frontend apps/web client web ."; fi
+  for d in $dirs; do
+    pkg="$TREE/$d/package.json"
+    [ -f "$pkg" ] || continue
+    if pkg_has_dep "$pkg" next; then FE_DIR="$d"; FE_KIND="next"; break; fi
+    if pkg_has_dep "$pkg" react-scripts; then FE_DIR="$d"; FE_KIND="cra"; break; fi
+    if pkg_has_dep "$pkg" vite; then FE_DIR="$d"; FE_KIND="vite"; break; fi
+    # package.json with no known framework: remember it as a fallback location.
+    [ -z "$FE_DIR" ] && { FE_DIR="$d"; FE_KIND="unknown"; }
+  done
+  [ -n "$FE_DIR" ] || return 0
+  pkg="$TREE/$FE_DIR/package.json"
+  dev="$(pkg_dev_script "$pkg")"
+  case "$FE_KIND" in
+    next)
+      # If scripts.dev pins a port (-p / --port), bypass it and emit the dev
+      # binary directly so we control the per-slot port.
+      if printf '%s' "$dev" | grep -qE -- '(-p|--port)([= ]|$)'; then
+        FE_CMD='npx next dev -p $FRONTEND_PORT'
+        FE_NOTE="next (dev script pinned a port, overriding per slot)"
+      else
+        FE_CMD='npx next dev -p $FRONTEND_PORT'
+        FE_NOTE="next"
+      fi
+      FE_ENV='NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL'
+      ;;
+    vite)
+      FE_CMD='npx vite --port $FRONTEND_PORT'
+      FE_ENV='VITE_API_URL=$BACKEND_URL'
+      FE_NOTE="vite"
+      ;;
+    cra)
+      FE_CMD='npm start'
+      FE_ENV='PORT=$FRONTEND_PORT; REACT_APP_API_URL=$BACKEND_URL'
+      FE_NOTE="create-react-app (PORT env carries the slot)"
+      ;;
+    *)
+      FE_CMD=""
+      FE_NOTE="unrecognized frontend in $FE_DIR (TODO: fill FRONTEND_CMD)"
+      ;;
+  esac
+}
+
+# Detect the backend. Sets BE_DIR BE_KIND BE_CMD BE_ENV BE_NOTE (globals).
+detect_backend() {
+  BE_DIR="" BE_KIND="" BE_CMD="" BE_ENV="" BE_NOTE=""
+  local dirs d base
+  # Prefer a conventional subdir over the repo root: a dedicated backend dir is a
+  # stronger signal than a pyproject.toml at the root. Root is last. (If your
+  # backend lives under a differently named dir, pass it at the init prompt or
+  # via INIT_BACKEND_DIR — it goes in your local config, not here.)
+  if [ -n "${INIT_BACKEND_DIR:-}" ]; then dirs="$INIT_BACKEND_DIR"; else
+    dirs="backend apps/api server api ."; fi
+  for d in $dirs; do
+    base="$TREE/$d"
+    [ -d "$base" ] || continue
+    if [ -f "$base/pyproject.toml" ] && [ -f "$base/uv.lock" ]; then
+      BE_DIR="$d"; BE_KIND="uv"; break; fi
+    if [ -f "$base/manage.py" ]; then BE_DIR="$d"; BE_KIND="django"; break; fi
+    if [ -f "$base/Gemfile" ]; then BE_DIR="$d"; BE_KIND="rails"; break; fi
+    if [ -f "$base/package.json" ] && { pkg_has_dep "$base/package.json" express || pkg_has_dep "$base/package.json" @nestjs/core; }; then
+      BE_DIR="$d"; BE_KIND="node"; break; fi
+    if [ -f "$base/go.mod" ]; then BE_DIR="$d"; BE_KIND="go"; break; fi
+  done
+  [ -n "$BE_DIR" ] || return 0
+  base="$TREE/$BE_DIR"
+  case "$BE_KIND" in
+    uv)
+      if [ -f "$base/main.py" ]; then
+        BE_CMD='uv run main.py'
+      else
+        BE_CMD='uv run uvicorn main:app --port $BACKEND_PORT'
+      fi
+      BE_NOTE="uv (python)"
+      ;;
+    django)
+      BE_CMD='python manage.py runserver 0.0.0.0:$BACKEND_PORT'
+      BE_NOTE="django"
+      ;;
+    rails)
+      BE_CMD='bin/rails server -p $BACKEND_PORT'
+      BE_NOTE="rails"
+      ;;
+    node)
+      BE_CMD='npm run dev'
+      BE_ENV='PORT=$BACKEND_PORT'
+      BE_NOTE="node (express/nest; PORT env carries the slot)"
+      ;;
+    go)
+      BE_CMD=""
+      BE_NOTE="go (no reliable default; TODO: fill BACKEND_CMD)"
+      ;;
+    *)
+      BE_CMD=""
+      BE_NOTE="unrecognized backend in $BE_DIR (TODO: fill BACKEND_CMD)"
+      ;;
+  esac
+}
+
+# Emit the declarative config to stdout.
+emit_config() {
+  local fpb="$1" bpb="$2"
+  cat <<EOF
+# ataegina.config.sh
+# Generated by: ataegina init ($VERSION)
+#
+# Declarative config: ataegina's default hooks read these vars, so you do not
+# need to write any bash. (Power users can still define ate_start_* functions
+# below to override; see ataegina.config.example.sh.)
+#
+# detected:
+#   frontend: ${FE_NOTE:-none found}${FE_DIR:+  (dir: $FE_DIR)}
+#   backend:  ${BE_NOTE:-none found}${BE_DIR:+  (dir: $BE_DIR)}
+#
+# Ports are derived per worktree: FRONT_PORT_BASE+N and BACK_PORT_BASE+N. The
+# *_CMD strings reference \$FRONTEND_PORT / \$BACKEND_PORT / \$BACKEND_URL, which
+# ataegina exports before running them.
+
+FRONT_PORT_BASE=$fpb
+BACK_PORT_BASE=$bpb
+
+EOF
+  # Frontend block.
+  if [ -n "$FE_DIR" ] && [ -n "$FE_CMD" ]; then
+    printf 'FRONTEND_DIR=%s\n' "$(emit_quote "$FE_DIR")"
+    printf 'FRONTEND_CMD=%s\n' "$(emit_quote "$FE_CMD")"
+    if [ -n "$FE_ENV" ]; then
+      echo '# You may need to rename this to the env var your app actually reads.'
+      printf 'FRONTEND_ENV=%s\n' "$(emit_quote "$FE_ENV")"
+    fi
+  else
+    echo '# TODO: no frontend detected. Set the directory and start command.'
+    echo '# FRONTEND_DIR=frontend'
+    echo '# FRONTEND_CMD='\''npm run dev -- --port $FRONTEND_PORT'\'''
+    echo '# FRONTEND_ENV='\''PUBLIC_API_BASE_URL=$BACKEND_URL'\'''
+  fi
+  echo
+  # Backend block.
+  if [ -n "$BE_DIR" ] && [ -n "$BE_CMD" ]; then
+    printf 'BACKEND_DIR=%s\n' "$(emit_quote "$BE_DIR")"
+    printf 'BACKEND_CMD=%s\n' "$(emit_quote "$BE_CMD")"
+    [ -n "$BE_ENV" ] && printf 'BACKEND_ENV=%s\n' "$(emit_quote "$BE_ENV")"
+  else
+    echo '# TODO: no backend detected. Set the directory and start command.'
+    echo '# BACKEND_DIR=backend'
+    echo '# BACKEND_CMD='\''your-server --port $BACKEND_PORT'\'''
+    echo '# BACKEND_ENV='\''EXTRA_KEY=value'\'''
+  fi
+  # The block above can end on a falsy `[ -n "$BE_ENV" ] && ...` test; without an
+  # explicit success here emit_config would return 1, and `set -e` would abort
+  # the caller (cmd_init) before it printed "wrote ..." or returned 0.
+  return 0
+}
+
+# Single-quote a value for the config, keeping $VAR references literal so they
+# expand at run time (inside the hook's sh -c), not now.
+emit_quote() {
+  printf "'%s'" "$1"
+}
+
+cmd_init() {
+  INIT_INTERACTIVE=1 INIT_YES=0 INIT_FORCE=0 INIT_DRY=0
+  INIT_FRONTEND_DIR="" INIT_BACKEND_DIR=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes|-y|--non-interactive) INIT_YES=1; INIT_INTERACTIVE=0 ;;
+      --frontend-dir) INIT_FRONTEND_DIR="${2:-}"; shift ;;
+      --backend-dir)  INIT_BACKEND_DIR="${2:-}"; shift ;;
+      --force)        INIT_FORCE=1 ;;
+      --dry-run)      INIT_DRY=1 ;;
+      *) echo "ataegina init: unknown option '$1'" >&2; exit 2 ;;
+    esac
+    shift
+  done
+  # A non-tty stdin (pipe, CI) also disables prompts.
+  [ -t 0 ] || INIT_INTERACTIVE=0
+
+  local target="$TREE/ataegina.config.sh"
+  if [ "$INIT_DRY" != "1" ] && [ -f "$target" ] && [ "$INIT_FORCE" != "1" ]; then
+    echo "ataegina init: $target already exists (use --force to overwrite, or --dry-run to preview)" >&2
+    exit 1
+  fi
+
+  detect_frontend
+  detect_backend
+
+  # Interactive confirmation of the detected values.
+  local fpb bpb
+  fpb="$(ask 'frontend port base' "${FRONT_PORT_BASE}")"
+  bpb="$(ask 'backend port base' "${BACK_PORT_BASE}")"
+  if [ "${INIT_INTERACTIVE:-1}" = "1" ]; then
+    FE_DIR="$(ask 'frontend dir' "$FE_DIR")"
+    [ -n "$FE_CMD" ] && FE_CMD="$(ask 'frontend command' "$FE_CMD")"
+    [ -n "$FE_ENV" ] && FE_ENV="$(ask 'frontend env' "$FE_ENV")"
+    BE_DIR="$(ask 'backend dir' "$BE_DIR")"
+    [ -n "$BE_CMD" ] && BE_CMD="$(ask 'backend command' "$BE_CMD")"
+    [ -n "$BE_ENV" ] && BE_ENV="$(ask 'backend env' "$BE_ENV")"
+  fi
+
+  if [ "$INIT_DRY" = "1" ]; then
+    emit_config "$fpb" "$bpb"
+    return 0
+  fi
+  emit_config "$fpb" "$bpb" > "$target"
+  log "wrote $target"
+  log "  frontend: ${FE_NOTE:-none}    backend: ${BE_NOTE:-none}"
+  log "  review it, then: ataegina up"
+}
+
+# ---------------------------------------------------------------------------
+# config: get / set / list / unset / path. Edit ataegina.config.sh from the CLI
+# so the file is essentially never hand-edited. Dispatched early (after config
+# load, before index assignment): it needs the config resolved to report
+# effective values + sources, but it does not need a port slot.
+#
+# Only the WHITELIST of known scalar keys may be set/unset. We deliberately
+# refuse arbitrary keys so `config set` can never inject bash into a file that is
+# later sourced. The hook FUNCTIONS (ate_start_*, ate_stop_*, ate_doctor) are NOT
+# settable here; editing those means opening the file directly.
+# ---------------------------------------------------------------------------
+
+# The settable keys, space-separated. Keep in sync with usage() and the example.
+ATE_CONFIG_KEYS="FRONT_PORT_BASE BACK_PORT_BASE LOG_DIR_BASE REGISTRY_DIR FRONTEND_DIR FRONTEND_CMD FRONTEND_ENV BACKEND_DIR BACKEND_CMD BACKEND_ENV DB_NAME DB_KIND DB_SUFFIX DB_URL_VAR DB_URL_TEMPLATE DB_AUTO_CREATE DB_CREATE_CMD DB_DROP_CMD ATE_BASE_BRANCH ATE_SCOPE_AUTO ATE_PORT_TOOL ATE_UPDATE_CHECK"
+
+# True if KEY is in the whitelist.
+config_key_known() {
+  local k="$1" known
+  for known in $ATE_CONFIG_KEYS; do
+    [ "$k" = "$known" ] && return 0
+  done
+  return 1
+}
+
+# Reject obviously-bogus keys early with a shared message. A hook-function name
+# gets a targeted hint (edit the file directly); anything else gets the list.
+config_reject_key() {
+  local k="$1"
+  case "$k" in
+    ate_start_*|ate_stop_*|ate_doctor)
+      echo "ataegina config: '$k' is a hook FUNCTION, not a settable key." >&2
+      echo "  Define it by editing the config file directly: $(config_target_path)" >&2
+      ;;
+    *)
+      echo "ataegina config: unknown key '$k' (refusing to write)." >&2
+      echo "  Settable keys: $ATE_CONFIG_KEYS" >&2
+      ;;
+  esac
+  return 2
+}
+
+# Resolve the config file path that get/set/list/path operate on (the WRITE
+# target). Precedence mirrors load_config's read order so set/get stay coherent:
+#   1. $ATE_CONFIG (explicit path) wins
+#   2. --global    -> $XDG_CONFIG_HOME/ataegina/ataegina.config.sh
+#   3. default     -> repo-root ataegina.config.sh
+# CONFIG_GLOBAL is set by cmd_config when --global was passed.
+config_target_path() {
+  if [ -n "${ATE_CONFIG:-}" ]; then
+    printf '%s\n' "$ATE_CONFIG"
+  elif [ "${CONFIG_GLOBAL:-0}" = "1" ]; then
+    printf '%s\n' "$REGISTRY_DIR/ataegina.config.sh"
+  else
+    printf '%s\n' "$TREE/ataegina.config.sh"
+  fi
+}
+
+# Single-quote VALUE for writing into the config, keeping it literal so a
+# deferred-expansion value like `npx next dev -p $FRONTEND_PORT` round-trips
+# unchanged. Embedded single quotes are escaped the standard shell way: '\''.
+config_quote() {
+  local v="$1" out esc
+  # Replace every ' with the standard '\'' sequence (close-quote, escaped quote,
+  # reopen-quote). Build the replacement in a var: in ${v//pat/repl} the repl is
+  # taken literally (backslashes are NOT unescaped), so an inline \'\\\'\' would
+  # be stored verbatim. bash 3.2-safe global substitution; not a GNU-ism.
+  esc="'\\''"
+  out="${v//\'/$esc}"
+  printf "'%s'" "$out"
+}
+
+# Header written when we have to create the target file from scratch. Minimal but
+# valid sourceable bash, and it points back at the example for the full menu.
+config_header() {
+  cat <<'EOF'
+# ataegina.config.sh
+# Managed by `ataegina config set` (and hand-editable). Plain, dependency-free
+# bash; sourced by ataegina before each command. See ataegina.config.example.sh
+# for every key and the hook escape hatch (ate_start_* / ate_doctor).
+EOF
+}
+
+# config set KEY VALUE: replace a top-level `KEY=...` assignment in place, or
+# append it if absent. Everything else (comments, blank lines, hook functions) is
+# preserved. Rewrites via awk to a temp file then mv (portable; no sed -i).
+config_do_set() {
+  local key="$1" value="$2" target quoted tmp _ln
+  target="$(config_target_path)"
+  config_key_known "$key" || { config_reject_key "$key"; return 2; }
+  quoted="$(config_quote "$value")"
+
+  if [ ! -f "$target" ]; then
+    mkdir -p "$(dirname "$target")" || return 1
+    { config_header; echo; printf '%s=%s\n' "$key" "$quoted"; } > "$target"
+    log "config: created $target"
+    log "config: set $key"
+    return 0
+  fi
+
+  tmp="$(mktemp)" || return 1
+  # Two passes, no value through awk (awk -v mangles backslashes, which our
+  # '\''-escaped value can contain). First awk REWRITES the file, marking the
+  # FIRST top-level `KEY=` line with a sentinel so the shell can drop it in the
+  # right place; the new assignment line is written by printf, never by awk. A
+  # top-level assignment has KEY= as its first non-space token, so `# KEY=`
+  # comments and `local KEY=` inside functions are left untouched. The sentinel
+  # is an ASCII unit-separator (0x1f), which cannot occur in a real config line.
+  local sep replaced
+  sep=$'\x1f'
+  awk -v key="$key" -v sep="$sep" '
+    !done && $0 ~ ("^[[:space:]]*" key "=") { print sep; done=1; next }
+    { print }
+    END { if (!done) print sep }
+  ' "$target" > "$tmp" || { rm -f "$tmp"; return 1; }
+  # Now stream the temp file back out, substituting the printf-built assignment
+  # line for the sentinel. Done in a subshell to a second temp, then mv.
+  local tmp2
+  tmp2="$(mktemp)" || { rm -f "$tmp"; return 1; }
+  replaced=0
+  while IFS= read -r _ln || [ -n "$_ln" ]; do
+    if [ "$_ln" = "$sep" ] && [ "$replaced" = 0 ]; then
+      printf '%s=%s\n' "$key" "$quoted" >> "$tmp2"
+      replaced=1
+    else
+      printf '%s\n' "$_ln" >> "$tmp2"
+    fi
+  done < "$tmp"
+  rm -f "$tmp"
+  mv "$tmp2" "$target"
+  log "config: set $key  ($target)"
+}
+
+# config unset KEY: drop the first top-level `KEY=...` assignment. Other lines
+# preserved. No-op (with a note) if the key is not assigned at top level.
+config_do_unset() {
+  local key="$1" target tmp removed
+  target="$(config_target_path)"
+  config_key_known "$key" || { config_reject_key "$key"; return 2; }
+  if [ ! -f "$target" ]; then
+    echo "ataegina config: no config file at $target" >&2
+    return 1
+  fi
+  tmp="$(mktemp)" || return 1
+  awk -v key="$key" '
+    !done && $0 ~ ("^[[:space:]]*" key "=") { done=1; next }
+    { print }
+    END { exit (done ? 0 : 1) }
+  ' "$target" > "$tmp"
+  removed=$?
+  if [ "$removed" = 0 ]; then
+    mv "$tmp" "$target"
+    log "config: unset $key  ($target)"
+  else
+    rm -f "$tmp"
+    log "config: $key was not set at top level in $target (nothing removed)"
+  fi
+}
+
+# config get KEY: print KEY's EFFECTIVE value (after the normal config load, so
+# defaults are reflected). Empty line if unset and no default.
+config_do_get() {
+  local key="$1"
+  config_key_known "$key" || { config_reject_key "$key"; return 2; }
+  # Indirect expansion: ${!key} is bash 3.2-safe via eval-free `${!var}`.
+  printf '%s\n' "${!key-}"
+}
+
+# Where did KEY's effective value come from? "set in <file>" if the resolved
+# config file assigns it at top level; "default" if it has a value but the file
+# does not assign it; "unset" if it has no value at all.
+config_source_of() {
+  local key="$1" loaded val assigned
+  loaded="${ATE_CONFIG_LOADED:-}"
+  val="${!key-}"
+  assigned=0
+  if [ -n "$loaded" ] && [ -f "$loaded" ] \
+     && grep -qE "^[[:space:]]*$key=" "$loaded" 2>/dev/null; then
+    assigned=1
+  fi
+  if [ "$assigned" = 1 ]; then
+    printf 'set in %s\n' "$loaded"
+  elif [ -n "$val" ]; then
+    printf 'default\n'
+  else
+    printf 'unset\n'
+  fi
+}
+
+# config list: every known key with its effective value + source, plus which
+# config file is loaded and which file set/get would write to.
+config_do_list() {
+  local loaded target key val src
+  loaded="${ATE_CONFIG_LOADED:-}"
+  target="$(config_target_path)"
+  if [ -n "$loaded" ]; then
+    log "config loaded from: $loaded"
+  else
+    log "config loaded from: (none found)"
+  fi
+  if [ "$target" != "$loaded" ]; then
+    log "config get/set target: $target"
+  fi
+  for key in $ATE_CONFIG_KEYS; do
+    val="${!key-}"
+    src="$(config_source_of "$key")"
+    printf '  %-20s %-28s [%s]\n' "$key" "${val:-(empty)}" "$src"
+  done
+}
+
+cmd_config() {
+  CONFIG_GLOBAL=0
+  # Pull --global out of the args first (it may appear anywhere). Collect the
+  # rest positionally into a small fixed set (sub + up to two operands).
+  local sub="" a1="" a2="" seen=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --global) CONFIG_GLOBAL=1 ;;
+      *)
+        case "$seen" in
+          0) sub="$1" ;;
+          1) a1="$1" ;;
+          2) a2="$1" ;;
+          *) echo "ataegina config: too many arguments" >&2; return 2 ;;
+        esac
+        seen=$((seen + 1))
+        ;;
+    esac
+    shift
+  done
+  # No subcommand -> list (the default).
+  [ -z "$sub" ] && sub="list"
+
+  case "$sub" in
+    list)
+      config_do_list
+      ;;
+    path)
+      config_target_path
+      ;;
+    get)
+      [ -n "$a1" ] || { echo "ataegina config get: missing KEY" >&2; return 2; }
+      config_do_get "$a1"
+      ;;
+    set)
+      [ -n "$a1" ] || { echo "ataegina config set: missing KEY" >&2; return 2; }
+      # An explicit empty value is allowed (clearing a key by setting it to ""),
+      # but the operand must be PRESENT. seen counts sub + operands.
+      [ "$seen" -ge 3 ] || { echo "ataegina config set: missing VALUE (use: config set KEY VALUE)" >&2; return 2; }
+      config_do_set "$a1" "$a2"
+      ;;
+    unset)
+      [ -n "$a1" ] || { echo "ataegina config unset: missing KEY" >&2; return 2; }
+      config_do_unset "$a1"
+      ;;
+    *)
+      echo "ataegina config: unknown subcommand '$sub' (list|get|set|unset|path)" >&2
+      return 2
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# doctor: read-only diagnostics. Prints a status line per check using plain
+# ASCII markers ([ok]/[warn]/[fail]) and NEVER mutates anything. Dispatched from
+# the main case (after config load + index resolution) so it can see N, ports,
+# and the loaded config. Exit code is nonzero only if a hard [fail] occurred
+# (e.g. not inside a git worktree); plain [warn]s keep the exit code at 0, so
+# doctor is usable as a CI gate.
+DOCTOR_FAILED=0
+dok()   { printf '[ok]   %s\n' "$*"; }
+dwarn() { printf '[warn] %s\n' "$*"; }
+dfail() { printf '[fail] %s\n' "$*"; DOCTOR_FAILED=1; }
+
+cmd_doctor() {
+  log "ataegina doctor  (read-only)"
+
+  # 1. Launcher on PATH. Resolve under the INVOKED name (the basename of $0, e.g.
+  #    the recommended `ate` symlink), then fall back to the canonical `ataegina`.
+  #    A literal `command -v ataegina` would false-warn for anyone running via the
+  #    `ate` alias even though the launcher is perfectly on PATH.
+  local self onpath
+  self="$(basename -- "$0")"
+  onpath="$(command -v "$self" 2>/dev/null || true)"
+  if [ -n "$onpath" ]; then
+    dok "launcher: on PATH as $self ($onpath); version $VERSION"
+  elif [ "$self" != "ataegina" ] && onpath="$(command -v ataegina 2>/dev/null)" && [ -n "$onpath" ]; then
+    dok "launcher: on PATH as ataegina ($onpath); version $VERSION"
+  else
+    dwarn "launcher: not on PATH (running via a relative path); version $VERSION"
+  fi
+
+  # 2. Git worktree + registry.
+  #    Reaching doctor at all means the toplevel resolved (a hard fail earlier
+  #    would have exited), so confirm and report the resolved index + registry.
+  dok "worktree: index #$N  $TREE"
+  if [ -f "$REGISTRY" ]; then
+    dok "registry: $REGISTRY"
+  else
+    dok "registry: $REGISTRY (not yet created)"
+  fi
+  # Does THIS tree have a registry entry? (index 0 / primary is implicit.)
+  if [ "$N" = "0" ] && [ "$TREE" = "$PRIMARY" ]; then
+    dok "registry entry: this tree is the primary (index 0, implicit)"
+  elif [ -f "$REGISTRY" ] && awk -F'\t' -v p="$TREE" '$2==p{found=1} END{exit !found}' "$REGISTRY"; then
+    dok "registry entry: present for this tree"
+  else
+    dwarn "registry entry: none for this tree yet (assigned on first 'up')"
+  fi
+  # Stale entries (paths that no longer exist) anywhere in the registry.
+  if [ -f "$REGISTRY" ]; then
+    local stale_idx stale_path stale_n=0
+    while IFS=$'\t' read -r stale_idx stale_path; do
+      [ -z "$stale_idx" ] && continue
+      if [ ! -d "$stale_path" ]; then
+        dwarn "stale registry entry: #$stale_idx  $stale_path"
+        stale_n=$((stale_n + 1))
+      fi
+    done < "$REGISTRY"
+    [ "$stale_n" -gt 0 ] && dwarn "registry has $stale_n stale entr$([ "$stale_n" = 1 ] && echo y || echo ies); clean up with: ataegina prune"
+  fi
+
+  # 3. Config resolution.
+  if [ -n "${ATE_CONFIG_LOADED:-}" ]; then
+    dok "config: loaded $ATE_CONFIG_LOADED"
+  else
+    dwarn "config: no config found, run: ataegina init"
+  fi
+
+  # 4. Start config usable per side: a user-defined hook OR a declarative *_CMD.
+  #    NOTE: ataegina always defines DEFAULT ate_start_* functions, so we cannot
+  #    test "is the function defined". Instead we treat a side as runnable if the
+  #    declarative *_CMD is set; if not, we only count a hook as user-supplied
+  #    when the config redefined it (see config_redefines_start below).
+  local fe_ok=0 be_ok=0
+  if config_redefines_start ate_start_frontend "$ATE_DEFAULT_START_FRONTEND"; then
+    dok "frontend start: custom ate_start_frontend hook defined"; fe_ok=1
+  elif [ -n "${FRONTEND_CMD:-}" ]; then
+    dok "frontend start: FRONTEND_CMD is set"; fe_ok=1
+  else
+    dwarn "frontend start: nothing to start (no FRONTEND_CMD and no ate_start_frontend hook)"
+  fi
+  if config_redefines_start ate_start_backend "$ATE_DEFAULT_START_BACKEND"; then
+    dok "backend start: custom ate_start_backend hook defined"; be_ok=1
+  elif [ -n "${BACKEND_CMD:-}" ]; then
+    dok "backend start: BACKEND_CMD is set"; be_ok=1
+  else
+    dwarn "backend start: nothing to start (no BACKEND_CMD and no ate_start_backend hook)"
+  fi
+  [ "$fe_ok" = 0 ] && [ "$be_ok" = 0 ] && dwarn "start config: neither side is runnable (run: ataegina init)"
+
+  # 4a. Per-worktree database, when configured.
+  if [ -n "${DB_NAME:-}" ]; then
+    dok "database: $ATE_DB_NAME ($DB_KIND$([ "$N" = 0 ] && echo ', primary/shared' || echo ", worktree #$N"))"
+    local _dbcmd _dbtool
+    _dbcmd="${DB_CREATE_CMD:-$(ate_db_default_cmd create)}"
+    _dbtool="$(printf '%s' "$_dbcmd" | awk '{print $1}')"
+    if [ -z "$_dbcmd" ]; then
+      dwarn "database: no create command for DB_KIND='$DB_KIND' (set DB_CREATE_CMD or define ate_db_create)"
+    elif [ "$_dbtool" != ":" ] && ! command -v "$_dbtool" >/dev/null 2>&1; then
+      dwarn "database: create tool '$_dbtool' not on PATH (per-worktree DB create will fail)"
+    fi
+  fi
+
+  # 4b. Detected scope: what `ataegina up` would resolve for this tree (the same
+  #     UP_SCOPE_FLAG / scope: / auto-detect chain, minus any --scope this run).
+  #     Report the RAW detected value; when it is an auto-detected `none`, annotate
+  #     that `up` would nudge it to both (F5) without changing the raw value.
+  local _dscope
+  UP_SCOPE_FLAG=""
+  # Call plainly (NOT in $(...)) so the source side channel survives.
+  resolve_scope >/dev/null
+  _dscope="$RESOLVED_SCOPE"
+  if [ "$_dscope" = "none" ] && [ "${RESOLVED_SCOPE_SOURCE:-}" = "auto" ]; then
+    dok "scope: none (auto -> both on 'up'; override with --scope)"
+  else
+    dok "scope: $_dscope (what 'ataegina up' would start; override with --scope)"
+  fi
+
+  # 5. Port availability for THIS tree's slot. "In use" is phrased neutrally: it
+  #    may just be this tree already up. First report which backend probes ports;
+  #    'none' means the checks are degraded (up still starts servers blindly).
+  local _ptool
+  _ptool="$(ate_port_tool)"
+  if [ "$_ptool" = "none" ]; then
+    dwarn "port tool: none (install lsof, or iproute2 for ss; port checks degraded)"
+  else
+    dok "port tool: $_ptool"
+  fi
+  doctor_port_check "frontend" "$FE_PORT"
+  doctor_port_check "backend"  "$BE_PORT"
+
+  # 6. Frontend port-pin heuristic (best-effort; skip quietly if undeterminable).
+  #    If FRONTEND_DIR's package.json dev script pins -p/--port AND the configured
+  #    FRONTEND_CMD still routes through `npm run dev` (so the slot port never
+  #    reaches the dev binary), warn that the slot port is ignored.
+  if [ -n "${FRONTEND_CMD:-}" ]; then
+    local fe_pkg fe_dev
+    fe_pkg="$TREE/${FRONTEND_DIR:-.}/package.json"
+    if [ -f "$fe_pkg" ]; then
+      fe_dev="$(pkg_dev_script "$fe_pkg" 2>/dev/null || true)"
+      if [ -n "$fe_dev" ] \
+         && printf '%s' "$fe_dev" | grep -qE -- '(-p|--port)([= ]|$)' \
+         && printf '%s' "$FRONTEND_CMD" | grep -qE 'npm[[:space:]]+run[[:space:]]+dev' \
+         && ! printf '%s' "$FRONTEND_CMD" | grep -qE '\$FRONTEND_PORT'; then
+        dwarn "frontend port pin: package.json dev script pins a port and FRONTEND_CMD routes through 'npm run dev', so the slot port :$FE_PORT will be ignored; re-run: ataegina init"
+      fi
+    fi
+  fi
+
+  # 7. Per-tree URLs (same shape as `ports`).
+  log "urls"
+  echo "  frontend: http://localhost:$FE_PORT"
+  echo "  backend:  http://localhost:$BE_PORT"
+  echo "  logs:     $LOG_DIR"
+
+  # 8. Extension hook: run the user's ate_doctor last, if defined, so a stack can
+  #    add its own checks (CORS, sidecars, ...). It inherits the exported env.
+  if config_defines_hook ate_doctor; then
+    log "ate_doctor (config-defined checks)"
+    ate_doctor || true
+  fi
+
+  return "$DOCTOR_FAILED"
+}
+
+# True if NAME is currently defined as a function. Used to detect a purely
+# config-defined hook (ate_doctor has no built-in default, so mere existence
+# means the config supplied it).
+config_defines_hook() {
+  declare -F "$1" >/dev/null 2>&1
+}
+
+# True if the config REDEFINED a start hook that ataegina also ships a default
+# for. We compare the current function source against the snapshot taken before
+# the config was sourced; differing source means the user overrode it.
+config_redefines_start() {
+  local name="$1" default_src="$2" current_src
+  current_src="$(declare -f "$name" 2>/dev/null || true)"
+  [ -n "$current_src" ] && [ "$current_src" != "$default_src" ]
+}
+
+# Check one port: free -> [ok]; in use -> [warn] naming the holder. The holder
+# description degrades to "(pid unknown)" when the backend cannot map pids.
+doctor_port_check() {
+  local label="$1" port="$2"
+  if ate_port_listening "$port"; then
+    dwarn "$label port :$port in use by $(ate_port_proc_desc "$port") (may be this tree already up)"
+  else
+    dok "$label port :$port is free"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Scope resolution for `up`. Returns frontend|backend|both|none on stdout.
+# Precedence (first hit wins):
+#   1. --scope <X>           (UP_SCOPE_FLAG, an explicit override for one run)
+#   2. scope: front matter   (a `scope:` line in $ATE_TASK_FILE, if exported)
+#   3. auto-detect           (ate_task_scope over the worktree diff)
+#   4. fallback              (both)
+# The primary checkout (index 0) is ALWAYS both unless --scope overrides it: it
+# is the shared baseline that frontend-only / none trees borrow their backend
+# from, so it must serve every surface.
+# Auto-detect is on by default; ATE_SCOPE_AUTO=0 disables it (forces both).
+#
+# Side channels (globals) for the caller: this sets RESOLVED_SCOPE (the resolved
+# value), RESOLVED_SCOPE_SOURCE (HOW it was reached:
+# flag|primary|declared|auto-off|auto|fallback) and RESOLVED_SCOPE_BASE (the base
+# ref auto-detect diffed against). `cmd_up` uses the source to apply the F5
+# auto-detect-only `none -> both` nudge; `doctor` uses it to annotate without
+# changing the raw detected value. Callers MUST invoke this plainly (not in a
+# `$(...)` subshell, which would discard the globals) and read RESOLVED_SCOPE. It
+# also echoes the value for convenience.
+# ---------------------------------------------------------------------------
+RESOLVED_SCOPE=""
+RESOLVED_SCOPE_SOURCE=""
+RESOLVED_SCOPE_BASE=""
+resolve_scope() {
+  RESOLVED_SCOPE="" RESOLVED_SCOPE_SOURCE="" RESOLVED_SCOPE_BASE=""
+  # 1. explicit flag wins outright, even on index 0.
+  if [ -n "${UP_SCOPE_FLAG:-}" ]; then
+    RESOLVED_SCOPE_SOURCE="flag"; RESOLVED_SCOPE="$UP_SCOPE_FLAG"
+    echo "$RESOLVED_SCOPE"; return 0
+  fi
+  # The primary checkout is the shared baseline -> both (unless --scope above).
+  if [ "$N" = "0" ]; then
+    RESOLVED_SCOPE_SOURCE="primary"; RESOLVED_SCOPE="both"
+    echo both; return 0
+  fi
+  # 2. declared scope: a `scope:` line in $ATE_TASK_FILE, if a caller set one.
+  local declared=""
+  if [ -n "${ATE_TASK_FILE:-}" ]; then
+    declared="$(ate_task_scope_field "$ATE_TASK_FILE")"
+  fi
+  if [ -n "$declared" ]; then
+    RESOLVED_SCOPE_SOURCE="declared"; RESOLVED_SCOPE="$declared"
+    echo "$declared"; return 0
+  fi
+  # auto-detect off -> fall straight back to both.
+  if [ "${ATE_SCOPE_AUTO:-1}" = "0" ]; then
+    RESOLVED_SCOPE_SOURCE="auto-off"; RESOLVED_SCOPE="both"
+    echo both; return 0
+  fi
+  # 3. auto-detect from the worktree diff. Base resolution (ate_scope_base):
+  #    ATE_BASE_BRANCH, else the branch upstream, else origin/HEAD, else the first
+  #    local of main/master/develop. ate_task_scope merge-bases against it.
+  local base
+  base="$(ate_scope_base "$TREE")"
+  RESOLVED_SCOPE_BASE="$base"
+  local detected
+  detected="$(ate_task_scope "$TREE" "$base" "${FRONTEND_DIR:-}" "${BACKEND_DIR:-}")"
+  if [ -n "$detected" ]; then
+    RESOLVED_SCOPE_SOURCE="auto"; RESOLVED_SCOPE="$detected"
+    echo "$detected"; return 0
+  fi
+  # 4. fallback.
+  RESOLVED_SCOPE_SOURCE="fallback"; RESOLVED_SCOPE="both"
+  echo both
+}
+
+# The `up` command. Parses its own args (a MODE word and/or --scope X), resolves
+# the effective scope, intersects it with MODE, and starts only what is needed,
+# pointing any surface it does not run locally at the shared default server.
+cmd_up() {
+  local mode="both"
+  UP_SCOPE_FLAG=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      both|backend|frontend) mode="$1" ;;
+      --scope)
+        UP_SCOPE_FLAG="${2:-}"; shift
+        case "$UP_SCOPE_FLAG" in
+          frontend|backend|both|none) ;;
+          *) echo "ataegina up: --scope must be frontend|backend|both|none" >&2; exit 2 ;;
+        esac
+        ;;
+      --scope=*)
+        UP_SCOPE_FLAG="${1#--scope=}"
+        case "$UP_SCOPE_FLAG" in
+          frontend|backend|both|none) ;;
+          *) echo "ataegina up: --scope must be frontend|backend|both|none" >&2; exit 2 ;;
+        esac
+        ;;
+      *) echo "ataegina up: unknown argument '$1' (both|backend|frontend, --scope X)" >&2; exit 2 ;;
+    esac
+    shift
+  done
+
+  mkdir -p "$LOG_DIR"
+  log "worktree #$N  $TREE"
+  log "  frontend :$FE_PORT   backend :$BE_PORT   logs $LOG_DIR"
+  [ -n "${ATE_CONFIG_LOADED:-}" ] && log "  config $ATE_CONFIG_LOADED"
+
+  local scope
+  # Call plainly (NOT in $(...)) so resolve_scope's globals survive; read the
+  # resolved value from RESOLVED_SCOPE.
+  resolve_scope >/dev/null
+  scope="$RESOLVED_SCOPE"
+
+  # F5: when scope was AUTO-DETECTED (no --scope, no `scope:` field) and came back
+  # `none` (empty diff vs the base, e.g. a freshly created worktree you are about
+  # to work in), starting nothing is surprising. In that auto-detect path ONLY,
+  # treat none as both and say so. An explicit `--scope none` (source=flag) and a
+  # `scope: none` task field (source=declared) still mean none; the primary
+  # (source=primary) is already both.
+  if [ "$scope" = "none" ] && [ "${RESOLVED_SCOPE_SOURCE:-}" = "auto" ]; then
+    log "no changes detected vs ${RESOLVED_SCOPE_BASE:-base}; starting both (narrow with --scope)"
+    scope=both
+  fi
+
+  # Intersect the resolved scope with the MODE arg (a hard limiter): `up frontend`
+  # never starts a backend regardless of scope, and vice versa.
+  case "$mode" in
+    backend)  case "$scope" in both|backend) scope=backend ;; *) scope=none ;; esac ;;
+    frontend) case "$scope" in both|frontend) scope=frontend ;; *) scope=none ;; esac ;;
+    both)     ;;  # no extra limit
+  esac
+
+  # The shared default servers in the primary checkout.
+  local shared_be="http://localhost:$BACK_PORT_BASE"
+  local local_be="http://localhost:$BE_PORT"
+
+  # Track what we actually launched here so we only poll those ports for readiness.
+  local did_be=0 did_fe=0
+  case "$scope" in
+    both)
+      log "scope: both (frontend + backend local)"
+      ate_db_ensure
+      ate_start_backend;  did_be=1
+      ate_start_frontend; did_fe=1
+      ;;
+    backend)
+      log "scope: backend (no frontend started)"
+      export BACKEND_URL="$local_be"
+      export FRONTEND_API_BASE_URL="$local_be"
+      ate_db_ensure
+      ate_start_backend; did_be=1
+      ;;
+    frontend)
+      # Frontend runs here; point it at the shared default backend on the base
+      # port, UNLESS nothing is listening there, in which case fall back to a
+      # local backend so we never serve a frontend against a dead API.
+      if ate_port_listening "$BACK_PORT_BASE"; then
+        log "scope: frontend (backend shared from :$BACK_PORT_BASE)"
+        export BACKEND_URL="$shared_be"
+        export FRONTEND_API_BASE_URL="$shared_be"
+      else
+        log "scope: frontend, but shared backend on :$BACK_PORT_BASE is DOWN -> starting a local backend on :$BE_PORT"
+        export BACKEND_URL="$local_be"
+        export FRONTEND_API_BASE_URL="$local_be"
+        ate_db_ensure
+        ate_start_backend; did_be=1
+      fi
+      ate_start_frontend; did_fe=1
+      ;;
+    none)
+      log "scope: none (nothing to start; this tree will use the default :$FRONT_PORT_BASE / :$BACK_PORT_BASE)"
+      ;;
+  esac
+
+  # Readiness: confirm each server we launched is actually listening (or point at
+  # its log if it is still coming up). This is what turns the old fire-and-forget
+  # "here's a URL, good luck" into an honest "ready" / "still starting" signal.
+  [ "$did_be" = 1 ] && ate_report_ready "backend"  "$BE_PORT" "$BACKEND_URL"
+  [ "$did_fe" = 1 ] && ate_report_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"
+}
+
+# A bare `ataegina` (no args) prints usage and exits at the top-level case above,
+# so $1 is always a real subcommand by the time we get here.
+CMD="${1:-}"
+MODE="${2:-both}"
+
+# `update` self-replaces this script. It needs no git worktree, no config, and no
+# port slot, so it runs here (before the worktree requirement below), mirroring
+# how --version / --help short-circuit at the top.
+if [ "$CMD" = "update" ]; then
+  rc=0
+  ate_update || rc=$?
+  exit "$rc"
+fi
+
+# Anchor on the worktree the user is standing in, NOT where this script lives.
+TREE="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "ataegina: not inside a git worktree" >&2; exit 1; }
+PRIMARY="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
+PRIMARY="${PRIMARY:-$TREE}"
+
+# init runs before config load (it writes the config) and before index
+# assignment (it does not need a port slot).
+if [ "$CMD" = "init" ]; then
+  log() { printf "\033[1;35m[ate]\033[0m %s\n" "$*"; }
+  shift
+  cmd_init "$@"
+  exit 0
+fi
+
+# Snapshot the DEFAULT start-hook bodies before sourcing the config, so doctor
+# can tell whether the user's config REDEFINED a start hook (vs. just inheriting
+# the built-in declarative default). declare -f prints the function source.
+ATE_DEFAULT_START_FRONTEND="$(declare -f ate_start_frontend 2>/dev/null || true)"
+ATE_DEFAULT_START_BACKEND="$(declare -f ate_start_backend 2>/dev/null || true)"
+
+load_config "$TREE"
+
+# Re-read registry paths in case the config changed REGISTRY_DIR. The registry is
+# per-repo (keyed on the primary checkout) unless ATE_REGISTRY pins one file.
+REGISTRY="$(ate_registry_file)"
+
+log() { printf "\033[1;35m[ate]\033[0m %s\n" "$*"; }
+
+# config runs after config load (so it can report effective values + the loaded
+# file) but BEFORE index assignment: editing the config needs no port slot, and
+# it must work even when no config exists yet (set creates one).
+if [ "$CMD" = "config" ]; then
+  shift
+  rc=0
+  cmd_config "$@" || rc=$?
+  exit "$rc"
+fi
+
+# Resolve (or assign) this worktree's index, persisting the mapping so the same
+# tree always gets the same ports across runs.
+#
+# Index recycling: the next free index is the lowest positive integer not
+# currently claimed in the registry. `prune` frees the slots of deleted trees,
+# so a freed index is reused by the next new worktree.
+resolve_index() {
+  if [ -n "${ATE_INDEX:-}" ]; then echo "$ATE_INDEX"; return; fi
+  if [ "$TREE" = "$PRIMARY" ]; then echo 0; return; fi
+  mkdir -p "$(dirname "$REGISTRY")"; touch "$REGISTRY"
+  local existing
+  existing="$(awk -F'\t' -v p="$TREE" '$2==p{print $1; exit}' "$REGISTRY")"
+  if [ -n "$existing" ]; then echo "$existing"; return; fi
+  local n=1
+  while awk -F'\t' -v i="$n" '$1==i{found=1} END{exit !found}' "$REGISTRY"; do
+    n=$((n + 1))
+  done
+  printf '%s\t%s\n' "$n" "$TREE" >> "$REGISTRY"
+  echo "$n"
+}
+
+N="$(resolve_index)"
+FE_PORT=$((FRONT_PORT_BASE + N))
+BE_PORT=$((BACK_PORT_BASE + N))
+LOG_DIR="${LOG_DIR_BASE}${N}"
+
+# Export the per-tree env every hook can rely on.
+export ATE_INDEX="$N"
+export REPO_ROOT="$TREE"
+export FRONTEND_PORT="$FE_PORT"
+export BACKEND_PORT="$BE_PORT"
+export DEV_LOG_DIR="$LOG_DIR"
+# A frontend talking to a per-tree backend needs the backend's address; a backend
+# building CORS/OAuth-redirect/email URLs needs the frontend's. Exported under the
+# common names so most stacks pick them up without remapping (and remap the rest
+# via FRONTEND_ENV/BACKEND_ENV). cmd_up may repoint BACKEND_URL when a frontend-only
+# tree shares the base-port backend; FRONTEND_URL is always this tree's frontend.
+export BACKEND_URL="http://localhost:$BE_PORT"
+export FRONTEND_URL="http://localhost:$FE_PORT"
+export FRONTEND_API_BASE_URL="http://localhost:$BE_PORT"
+
+# Per-worktree database name + URL (only when DB_NAME is configured). The primary
+# (index 0) keeps the unsuffixed name so it points at your shared dev DB; each
+# worktree N>0 gets its own DB_NAME$DB_SUFFIX$N so parallel agents never collide
+# on schema or data. DB_URL_TEMPLATE (trusted config, same model as *_CMD) is
+# expanded with $ATE_DB_NAME and injected into $DB_URL_VAR (default DATABASE_URL).
+if [ -n "${DB_NAME:-}" ]; then
+  if [ "$N" = 0 ]; then ATE_DB_NAME="$DB_NAME"; else ATE_DB_NAME="${DB_NAME}${DB_SUFFIX}${N}"; fi
+  export ATE_DB_NAME
+  if [ -n "${DB_URL_TEMPLATE:-}" ]; then
+    eval "_ate_db_url=\"$DB_URL_TEMPLATE\""
+    export "${DB_URL_VAR:-DATABASE_URL}=$_ate_db_url"
+  fi
+fi
+
+case "$CMD" in
+  up)
+    # Hand the rest of the args (everything after `up`) to cmd_up, which parses a
+    # MODE word and/or --scope and resolves the effective scope itself.
+    shift
+    cmd_up "$@"
+    # Opt-in, throttled, never blocks or affects the exit status of the work above.
+    ate_version_check_notice || true
+    ;;
+  down)
+    case "$MODE" in
+      both)     ate_stop_frontend; ate_stop_backend ;;
+      backend)  ate_stop_backend ;;
+      frontend) ate_stop_frontend ;;
+      *) echo "ataegina: unknown mode '$MODE' (both|backend|frontend)" >&2; exit 2 ;;
+    esac
+    ;;
+  logs)
+    shift
+    cmd_logs "$@"
+    ;;
+  db)
+    shift
+    cmd_db "$@"
+    ;;
+  ports)
+    log "worktree #$N  $TREE"
+    echo "  frontend: http://localhost:$FE_PORT"
+    echo "  backend:  http://localhost:$BE_PORT"
+    echo "  logs:     $LOG_DIR"
+    ;;
+  list)
+    printf '0\t%s (primary)\n' "$PRIMARY"
+    if [ -f "$REGISTRY" ]; then
+      while IFS=$'\t' read -r idx path; do
+        [ -z "$idx" ] && continue
+        if [ -d "$path" ]; then
+          printf '%s\t%s\n' "$idx" "$path"
+        else
+          printf '%s\t%s  \033[1;33m(stale - run: ataegina prune)\033[0m\n' "$idx" "$path"
+        fi
+      done < "$REGISTRY"
+    fi
+    ;;
+  prune)
+    [ -f "$REGISTRY" ] || { log "no registry to prune"; exit 0; }
+    tmp="$(mktemp)"
+    removed=0
+    while IFS=$'\t' read -r idx path; do
+      [ -z "$idx" ] && continue
+      if [ -d "$path" ]; then
+        printf '%s\t%s\n' "$idx" "$path" >> "$tmp"
+      else
+        log "pruned #$idx  $path"
+        removed=$((removed + 1))
+      fi
+    done < "$REGISTRY"
+    mv "$tmp" "$REGISTRY"
+    log "pruned $removed stale entr$([ "$removed" = 1 ] && echo y || echo ies)"
+    ;;
+  doctor)
+    # cmd_doctor may return nonzero on a hard [fail]; guard against set -e so we
+    # exit with its code rather than aborting mid-function.
+    rc=0
+    cmd_doctor || rc=$?
+    exit "$rc"
+    ;;
+  *)
+    echo "usage: ataegina [init|up|down|logs|db|ports|list|prune|doctor|config|update] [both|backend|frontend]" >&2
+    echo "       ataegina --help    for full usage" >&2
+    exit 2
+    ;;
+esac
