@@ -9,6 +9,10 @@ Entries are reconstructed from the git history and the commit messages of each
 release. Versions 0.3.1 and 0.3.2 were cut as commits that bump the `VERSION=`
 line but were not separately git-tagged.
 
+## [Unreleased]
+
+_Nothing yet._
+
 ## [0.5.0] - 2026-06-26
 
 ### Fixed

@@ -2,7 +2,7 @@
 name: Bug report
 about: Something in ataegina does not behave as documented
 title: "[bug] "
-labels: bug
+labels: ["type: bug", "status: needs triage"]
 assignees: ''
 ---
 
