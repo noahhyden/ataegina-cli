@@ -10,6 +10,8 @@
 [![Shell: bash 3.2+](https://img.shields.io/badge/shell-bash%203.2%2B-1f425f.svg)](#requirements)
 [![Platforms: macOS · Linux · WSL2](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-success.svg)](#platforms)
 
+![ataegina detecting a stack, then handing each worktree its own collision-free port slot](docs/demo.gif)
+
 Run a fleet of AI coding agents in parallel and they all fight over the same
 machine — same ports, same dev server, one shared database they stomp in
 unison. It's the same collision a human hits checking out three branches of a
