@@ -28,9 +28,6 @@ GRANITE    = (113, 111, 101)
 def blend(a, b, t):
     return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
-GREEN_TINT = blend(LAURISILVA, LIMEWASH, 0.45)   # readable green on dark panel
-DIM_TEXT   = blend(LIMEWASH,  BASALT,   0.30)     # dimmed limewash on dark
-
 def sf(size, weight=None):
     f = ImageFont.truetype("/System/Library/Fonts/SFNS.ttf", size * S)
     if weight:
@@ -48,47 +45,41 @@ def sfmono(size, weight=None):
         except Exception: pass
     return f
 
+def px(v): return v * S
+
 img = Image.new("RGB", (W, H), LIMEWASH)
 d = ImageDraw.Draw(img)
 
-def px(v): return v * S
-
-# left accent edge
-d.rectangle([0, 0, px(8), H], fill=FALU)
-
-def draw_tracked(x, y, text, font, fill, track):
+def tracked(x, y, text, font, fill, track):
     cx = x
     for ch in text:
         d.text((cx, y), ch, font=font, fill=fill)
         cx += d.textlength(ch, font=font) + px(track)
-    return cx
 
-LX = px(108)
-draw_tracked(LX, px(150), "GIT-WORKTREE DEV ENVIRONMENTS", sfmono(15, "Medium"), GRANITE, 4)
+# ---- left Laurisilva band + Falu seam ----
+BAND = px(520)
+d.rectangle([0, 0, BAND, H], fill=LAURISILVA)
+d.rectangle([BAND, 0, BAND + px(8), H], fill=FALU)
 
-# wordmark
-wm_font = sf(112, "Bold")
-d.text((LX - px(4), px(178)), "ataegina", font=wm_font, fill=BASALT)
-wm_w = d.textlength("ataegina", font=wm_font)
-d.rectangle([LX, px(330), LX + wm_w * 0.46, px(330) + px(9)], fill=FALU)
+LX = px(80)
+tracked(LX, px(150), "GIT-WORKTREE DEV ENVIRONMENTS", sfmono(15, "Medium"),
+        blend(LIMEWASH, LAURISILVA, 0.25), 4)
 
-# tagline
-tg = sf(37, "Regular")
-d.text((LX, px(366)), "Collision-free ports, processes and", font=tg, fill=BASALT)
-d.text((LX, px(366) + px(50)), "databases for every git worktree.", font=tg, fill=BASALT)
+wm = sf(104, "Bold")
+d.text((LX - px(4), px(182)), "ataegina", font=wm, fill=LIMEWASH)
+ww = d.textlength("ataegina", font=wm)
+d.rectangle([LX, px(326), LX + ww * 0.46, px(326) + px(9)], fill=blend(OCEAN, LIMEWASH, 0.35))
 
-# chips
-chip_f = sfmono(19, "Regular")
-cx, cy = LX, px(486)
-for i, c in enumerate(["zero-dependency", "single bash file", "macOS + Linux"]):
-    if i:
-        d.text((cx, cy), "·", font=chip_f, fill=LAURISILVA)
-        cx += d.textlength("·", font=chip_f) + px(14)
-    d.text((cx, cy), c, font=chip_f, fill=GRANITE)
-    cx += d.textlength(c, font=chip_f) + px(14)
+tg = sf(34, "Regular")
+for i, line in enumerate(["Collision-free ports,", "processes and databases",
+                          "for every git worktree."]):
+    d.text((LX, px(362) + i * px(46)), line, font=tg, fill=blend(LIMEWASH, LAURISILVA, 0.05))
 
-# terminal panel
-PX0, PY0, PX1, PY1 = px(726), px(168), px(1172), px(470)
+d.text((LX, px(566)), "github.com/noahhyden/ataegina-cli", font=sfmono(18),
+       fill=blend(LIMEWASH, LAURISILVA, 0.3))
+
+# ---- right side: terminal panel + chips on limewash ----
+PX0, PY0, PX1, PY1 = BAND + px(70), px(190), px(1200), px(452)
 d.rounded_rectangle([PX0, PY0, PX1, PY1], radius=px(16), fill=BASALT)
 
 dx = PX0 + px(26)
@@ -97,22 +88,30 @@ for col in (FALU, GRANITE, LAURISILVA):
     d.ellipse([dx, cyd, dx + 2 * r, cyd + 2 * r], fill=blend(col, LIMEWASH, 0.18))
     dx += px(26)
 
+FE = blend(LAURISILVA, LIMEWASH, 0.5)   # frontend port color
+BE = blend(OCEAN, LIMEWASH, 0.6)        # backend port color
+DIM = blend(LIMEWASH, BASALT, 0.35)
 m = menlo(21)
-ix = PX0 + px(28)
-ty = PY0 + px(70)
-d.text((ix, ty), "$ ", font=m, fill=GREEN_TINT)
+ix = PX0 + px(28); ty = PY0 + px(70)
+d.text((ix, ty), "$ ", font=m, fill=FE)
 d.text((ix + d.textlength("$ ", font=m), ty), "ataegina ports", font=m, fill=LIMEWASH)
 
 ry = ty + px(46)
-for label, ports in [("worktree 0", ":5173 / :8000"),
-                     ("worktree 1", ":5174 / :8001"),
-                     ("worktree 2", ":5175 / :8002")]:
-    d.text((ix, ry), label, font=m, fill=DIM_TEXT)
-    d.text((ix + d.textlength(label + "    ", font=m), ry), ports, font=m, fill=GREEN_TINT)
+for label, fp, bp in [("worktree 0", ":5173", ":8000"),
+                      ("worktree 1", ":5174", ":8001"),
+                      ("worktree 2", ":5175", ":8002")]:
+    d.text((ix, ry), label, font=m, fill=DIM)
+    cx = ix + d.textlength(label + "    ", font=m)
+    d.text((cx, ry), fp, font=m, fill=FE);  cx += d.textlength(fp, font=m)
+    d.text((cx, ry), " / ", font=m, fill=DIM); cx += d.textlength(" / ", font=m)
+    d.text((cx, ry), bp, font=m, fill=BE)
     ry += px(40)
 
-# footer url
-d.text((LX, px(566)), "github.com/noahhyden/ataegina-cli", font=sfmono(18, "Regular"), fill=GRANITE)
+cf = sfmono(18); cx, cy = PX0, px(486)
+for i, c in enumerate(["zero-dependency", "single bash file", "macOS + Linux"]):
+    if i:
+        d.text((cx, cy), "·", font=cf, fill=LAURISILVA); cx += d.textlength("·", font=cf) + px(12)
+    d.text((cx, cy), c, font=cf, fill=GRANITE); cx += d.textlength(c, font=cf) + px(12)
 
 img.resize((1280, 640), Image.LANCZOS).save(OUT)
 print("saved", OUT)
