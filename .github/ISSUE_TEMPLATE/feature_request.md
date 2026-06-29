@@ -2,7 +2,7 @@
 name: Feature request
 about: Suggest an idea or improvement for ataegina
 title: "[feature] "
-labels: enhancement
+labels: ["type: feature", "status: needs triage"]
 assignees: ''
 ---
 
