@@ -1,0 +1,23 @@
+# Local config (copy ataegina.config.example.sh to this and edit)
+ataegina.config.sh
+
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# The machine-local worktree-index registry, if you keep it in-repo
+worktree-index
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
