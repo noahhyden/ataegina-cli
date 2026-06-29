@@ -62,17 +62,6 @@ not already on your PATH. It never uses `sudo` and never edits your shell rc for
 you. Override the install dir with `ATE_BIN` (or `PREFIX`). The installer is a
 small, readable file: read it before you pipe it to a shell if you prefer.
 
-**Homebrew.** macOS (and Linuxbrew) users can install and upgrade from the tap.
-Works once the repo is public (private release assets are not downloadable
-unauthenticated):
-
-```bash
-brew install noahhyden/tap/ataegina
-```
-
-This installs the `ataegina` binary and an `ate` shortcut; `brew upgrade` picks
-up new releases.
-
 **Manual single file (no sudo).** Download, make executable, and put it anywhere
 on your PATH:
 
