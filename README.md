@@ -1,5 +1,17 @@
 # ataegina
 
+> Runtime isolation for git worktrees — collision-free ports, processes, **and
+> databases** for every worktree, from one zero-dependency bash file. No Docker,
+> no daemon, no YAML.
+
+[![CI](https://github.com/noahhyden/ataegina-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/noahhyden/ataegina-cli/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/noahhyden/ataegina-cli?sort=semver)](https://github.com/noahhyden/ataegina-cli/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Shell: bash 3.2+](https://img.shields.io/badge/shell-bash%203.2%2B-1f425f.svg)](#requirements)
+[![Platforms: macOS · Linux · WSL2](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-success.svg)](#platforms)
+
+![ataegina detecting a stack, then handing each worktree its own collision-free port slot](docs/demo.gif)
+
 Run a fleet of AI coding agents in parallel and they all fight over the same
 machine — same ports, same dev server, one shared database they stomp in
 unison. It's the same collision a human hits checking out three branches of a
@@ -12,6 +24,25 @@ without a container: each worktree boots against its own DB, so parallel work
 never shares schema or data.
 
 Named after the Lusitanian goddess of rebirth.
+
+## Contents
+
+- [The problem](#the-problem)
+- [What it ships](#what-it-ships)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Platforms](#platforms)
+- [Commands](#commands)
+- [How the launcher works](#how-the-launcher-works)
+  - [Per-worktree databases](#per-worktree-databases)
+  - [Scope-aware startup](#scope-aware-startup)
+  - [Diagnostics](#diagnostics)
+  - [Configuration keys](#configuration-keys)
+- [Updating](#updating)
+- [Requirements](#requirements)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
 
 ## The problem
 
@@ -468,6 +499,27 @@ updating is always an explicit `ataegina update`.
   PowerShell / cmd is not supported. See "Platforms".
 
 No runtime, no package manager, no build step.
+
+## Contributing
+
+Contributions are welcome. ataegina is deliberately small — one bash file, zero
+runtime dependencies, bash 3.2 compatible — and contributions are expected to
+keep it that way. Before opening a pull request, read
+[CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules, the development setup,
+and how to run the test suite (`bats tests/`) and the linter (`shellcheck`).
+Bug reports and feature requests go through the
+[issue templates](https://github.com/noahhyden/ataegina-cli/issues/new/choose);
+everyone is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Changes are recorded in
+[CHANGELOG.md](CHANGELOG.md).
+
+## Security
+
+ataegina downloads and replaces an executable script during `update`, so its
+integrity story matters. Every download is SHA-256 verified and `bash -n`
+parse-checked, and the config file is sourced bash that runs with your
+privileges — so only run ataegina in repositories you trust. The full trust
+model and how to report a vulnerability are in [SECURITY.md](SECURITY.md).
 
 ## License
 
