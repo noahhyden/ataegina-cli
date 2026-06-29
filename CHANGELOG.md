@@ -11,7 +11,23 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- `ataegina down` is no longer silent on success: each side now reports
+  `<label>: stopped on :<port>` when it actually stops something, instead of
+  printing nothing (only the "nothing to stop" path spoke before). Covered by
+  `tests/down.bats`.
+
+### Added
+
+- `ataegina move N` relocates the current worktree to index `N` (and therefore
+  a new derived port pair), rewriting the per-repo registry. It refuses an index
+  already held by another live worktree, rejects index 0 (reserved for the
+  primary) and non-numeric targets, frees the old index for reuse, and warns if
+  either new port is already in use. Motivated by dogfooding: when a worktree's
+  auto-assigned slot has a port permanently held by a process ataegina doesn't
+  manage, the derived port can never bind, and the only previous fix was to
+  hand-edit the registry. Covered by `tests/move.bats`.
 
 ## [0.5.0] - 2026-06-26
 

@@ -38,6 +38,8 @@ teardown() {
 
   run ate down backend
   [ "$status" -eq 0 ]
+  # A successful stop reports what it stopped (not silent).
+  echo "$output" | grep -qi "stopped"
 
   # Pidfile removed.
   [ ! -f "$pidfile" ]
