@@ -627,26 +627,67 @@ ate_start_frontend() {
   echo "frontend -> http://localhost:$FRONTEND_PORT  (log: $DEV_LOG_DIR/frontend.log)"
 }
 
-# Kill whatever holds a port. Pids come from the resolved port backend; when it
-# cannot map pids (proc/none, or nothing listening) we say so instead of failing.
+# Print PID plus every descendant of it, one per line, from a SINGLE ps snapshot
+# (consistent tree; no per-node re-shelling). Iterative BFS so it is bash-3.2-safe
+# and set -e-safe; portable ps (-Ao pid=,ppid= works on Linux and macOS/BSD).
+#
+# This is what lets `down` reap the worker/helper processes a dev server spawns but
+# that never hold the listening socket — uvicorn --reload (reloader + worker),
+# next dev / vite / esbuild, webpack/turbopack workers, a process manager. Killing
+# only the port holder (or only the recorded wrapper pid) orphaned those children;
+# they reparented to init and kept their memory, so every up/down cycle leaked one
+# — the "processes pile up untracked" drain the tool is meant to prevent.
+ate_pid_tree() {
+  local snap queue="$1" out="" cur kids
+  snap="$(ps -Ao pid=,ppid= 2>/dev/null || true)"
+  while [ -n "$queue" ]; do
+    cur="${queue%% *}"
+    case "$queue" in *" "*) queue="${queue#* }" ;; *) queue="" ;; esac
+    [ -n "$cur" ] || continue
+    out="$out $cur"
+    kids="$(printf '%s\n' "$snap" | awk -v pp="$cur" '$2==pp{print $1}' | tr '\n' ' ')"
+    [ -n "$kids" ] && queue="$queue $kids"
+  done
+  # shellcheck disable=SC2086
+  printf '%s\n' $out | grep -E '^[0-9]+$' | sort -un || true
+}
+
+# Kill everything belonging to a side's server: whatever holds the port, the pid we
+# recorded at `up` (the launch wrapper — catches a server still starting, or a parent
+# supervisor ABOVE the port holder), and — crucially — the ENTIRE process tree under
+# each, so worker/helper children are reaped too. Trees are enumerated BEFORE any
+# kill (killing a parent first would reparent its children to init and hide them).
+# SIGTERM the set, brief grace, then SIGKILL any survivor.
 _ate_stop_port() {
-  local label="$1" port="$2" pids stopped=0
-  pids="$(ate_port_pids "$port")"
-  if [ -n "$pids" ]; then
-    printf '%s\n' "$pids" | xargs kill 2>/dev/null || true
-    stopped=1
-  fi
-  # Also stop a process WE launched (pid recorded at `up`) that may not be holding
-  # the port: still installing/compiling, bound a different interface, or crashed
-  # leaving a child. This is what keeps orphans from surviving `down`.
+  local label="$1" port="$2" stopped=0 roots="" pid targets
+  roots="$(ate_port_pids "$port" | tr '\n' ' ')"
   local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid
   if [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ]; then
     lpid="$(cat "$pidfile" 2>/dev/null || true)"
-    if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
-      kill "$lpid" 2>/dev/null || true
-      stopped=1
-    fi
+    [ -n "$lpid" ] && roots="$roots $lpid"
     rm -f "$pidfile"
+  fi
+  targets=""
+  for pid in $roots; do
+    [ -n "$pid" ] || continue
+    targets="$targets $(ate_pid_tree "$pid" | tr '\n' ' ')"
+  done
+  # shellcheck disable=SC2086
+  targets="$(printf '%s\n' $targets | grep -E '^[0-9]+$' | sort -un | tr '\n' ' ' || true)"
+  if [ -n "${targets// /}" ]; then
+    # shellcheck disable=SC2086
+    kill $targets 2>/dev/null || true
+    stopped=1
+    local i=0 alive=""
+    while [ "$i" -lt 10 ]; do
+      alive=""
+      for pid in $targets; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
+      [ -z "${alive// /}" ] && break
+      sleep 0.1 2>/dev/null || sleep 1
+      i=$((i + 1))
+    done
+    # shellcheck disable=SC2086
+    [ -n "${alive// /}" ] && kill -9 $alive 2>/dev/null || true
   fi
   if [ "$stopped" = 1 ]; then echo "$label: stopped on :$port"; return 0; fi
   if ate_port_listening "$port"; then
