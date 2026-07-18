@@ -111,6 +111,28 @@ mock_repo() {
   [ "$(tree_count)" = 0 ]
 }
 
+@test "fake: up launches no duplicate when the slot port is already held (foreign holder)" {
+  local repo="$ATE_TMP/repo"
+  mock_repo "$repo" "MOCK_TAG=$TAG"
+  cd "$repo"
+  # Pre-occupy the backend slot with an INDEPENDENT holder ataegina never launched
+  # (a separate mock carrying a squatter sub-tag, so teardown's tag reap still
+  # catches it). ataegina cannot tell this from its own server — it only sees the
+  # port busy — but the defensible, lockable property is: it must NOT start a
+  # SECOND server on top of a held slot.
+  MOCK_TAG="${TAG}-squat" MOCK_PORT="$BE_BASE" bash "$MOCK" "${TAG}-squat" >/dev/null 2>&1 &
+  wait_listening "$BE_BASE"
+  local before; before="$(tree_count)"     # the squatter tree (its tag contains $TAG)
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "already up"    # (characterizes: foreign holder reads as up)
+  [ "$(tree_count)" -le "$before" ]         # no duplicate server launched on the slot
+  # NB: `ate down` here would kill the FOREIGN holder — a documented dev-possibility,
+  # deliberately NOT asserted so a future "leave foreign processes alone" fix is free
+  # to change it. Teardown reaps the squatter via its tag.
+}
+
 # --- readiness: crash vs slow boot -----------------------------------------
 
 @test "fake: an immediately-crashing backend is reported FAILED (not 'still starting')" {
