@@ -705,9 +705,20 @@ ate_stop_frontend() { _ate_stop_port "frontend" "$FRONTEND_PORT"; }
 # first runs (dependency sync, initial compile); we point at the log instead.
 ate_report_ready() {
   local label="$1" port="$2" url="$3" i=0
+  # The pid we recorded at launch, so we can tell a SLOW start from a DEAD one.
+  local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid=""
+  [ -f "$pidfile" ] && lpid="$(cat "$pidfile" 2>/dev/null || true)"
   while [ "$i" -lt 8 ]; do
     if ate_port_listening "$port"; then
       log "  $label ready -> $url"
+      return 0
+    fi
+    # If what we launched has already exited without binding, it FAILED to start
+    # (bad command, missing dep, crash, invalid port). Say so — and point at the
+    # log — instead of the misleading "still starting", which left users staring at
+    # a server that was never coming up.
+    if [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then
+      log "  $label FAILED to start (process exited) — see ${DEV_LOG_DIR:-?}/$label.log"
       return 0
     fi
     sleep 1; i=$((i + 1))
