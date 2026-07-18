@@ -78,7 +78,7 @@ PY
   [ -f "$feout" ]
   grep -q "BACKEND_URL=http://localhost:48000" "$feout"
   # And it did NOT start a local backend on the worktree's backend slot (48001).
-  ! listening 48001
+  refute listening 48001
 
   cd "$repo"; ate down backend || true
   cd "$wt";   ate down frontend || true

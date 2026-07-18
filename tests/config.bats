@@ -43,7 +43,7 @@ teardown() { common_teardown; }
   echo "$output" | grep -qi "unknown key"
   # If a config file got created, it must not contain the bogus key.
   if [ -f "$REPO/ataegina.config.sh" ]; then
-    ! grep -q "EVIL_KEY" "$REPO/ataegina.config.sh"
+    refute grep -q "EVIL_KEY" "$REPO/ataegina.config.sh"
   fi
 }
 
@@ -62,7 +62,7 @@ teardown() { common_teardown; }
   ate config unset DB_NAME
   run ate config get DB_NAME
   [ -z "$output" ]
-  ! grep -q '^DB_NAME=' "$REPO/ataegina.config.sh"
+  refute grep -q '^DB_NAME=' "$REPO/ataegina.config.sh"
 }
 
 @test "set preserves comments and hook functions already in the file" {

@@ -112,6 +112,10 @@ write_config() {
 # expectation into a real failure wherever they appear in the body.
 refute_output_has() { case "${output:-}" in *"$1"*) return 1 ;; *) return 0 ;; esac; }
 refute_alive()      { if kill -0 "$1" 2>/dev/null; then return 1; fi; return 0; }
+# Generic: run CMD…; FAIL (return 1) if it SUCCEEDS. For negative assertions on any
+# command (e.g. `refute grep -q PATTERN FILE`, `refute listening PORT`) without the
+# `! cmd` set -e-exemption footgun.
+refute()            { if "$@"; then return 1; fi; return 0; }
 
 # Reap every process whose command line contains the (specific, non-empty) tag.
 # Kills per-PID; refuses an unsafe tag with a loud message and no kill.
