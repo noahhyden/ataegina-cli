@@ -981,9 +981,22 @@ ate_task_scope_field() {
 # ---------------------------------------------------------------------------
 load_config() {
   local tree="$1" candidate
+  # Search order (first hit wins):
+  #   1. $ATE_CONFIG                    explicit override
+  #   2. <this worktree>/ataegina.config.sh
+  #   3. <PRIMARY checkout>/ataegina.config.sh
+  #   4. $REGISTRY_DIR/ataegina.config.sh   machine-wide default
+  # (3) is what makes the per-worktree workflow actually work: the config carries
+  # machine-specific ports/commands and so is naturally .gitignored, but git does NOT
+  # copy untracked files into a linked worktree — so a fresh worktree otherwise has NO
+  # config and `up` there failed with "no backend configured". Falling back to the
+  # primary checkout's config (the one the user ran `init` in) means every worktree
+  # inherits it and derives its own slot from its index, with no per-branch commit or
+  # global copy needed. The worktree's OWN config still wins if it has one.
   for candidate in \
     "${ATE_CONFIG:-}" \
     "$tree/ataegina.config.sh" \
+    "${PRIMARY:+$PRIMARY/ataegina.config.sh}" \
     "$REGISTRY_DIR/ataegina.config.sh"; do
     if [ -n "$candidate" ] && [ -f "$candidate" ]; then
       # shellcheck disable=SC1090
