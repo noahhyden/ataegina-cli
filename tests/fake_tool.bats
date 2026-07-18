@@ -86,6 +86,35 @@ mock_repo() {
   wait_free "$BE_BASE"
 }
 
+# --- both sides at once -----------------------------------------------------
+
+@test "fake: up both binds frontend + backend on distinct ports; down both reaps both" {
+  local repo="$ATE_TMP/repo"
+  make_repo "$repo" >/dev/null
+  # Same fake tool on BOTH sides; ataegina exports PORT per side (FRONTEND_PORT vs
+  # BACKEND_PORT), so each instance binds its own slot. Distinct sub-tags (both
+  # contain $TAG, so the tag reap/count still sees them) keep the sides separable.
+  write_config "$repo" \
+    "FRONT_PORT_BASE=$FE_BASE" "BACK_PORT_BASE=$BE_BASE" \
+    "FRONTEND_DIR='.'" "FRONTEND_CMD='bash \"$MOCK\" ${TAG}-fe'" "FRONTEND_ENV='MOCK_TAG=${TAG}-fe'" \
+    "BACKEND_DIR='.'"  "BACKEND_CMD='bash \"$MOCK\" ${TAG}-be'"  "BACKEND_ENV='MOCK_TAG=${TAG}-be'"
+  cd "$repo"
+
+  run ate up both --scope both
+  [ "$status" -eq 0 ]
+  wait_listening "$FE_BASE"
+  wait_listening "$BE_BASE"
+  listening "$FE_BASE"        # both held simultaneously == no collision
+  listening "$BE_BASE"
+
+  run ate down both
+  [ "$status" -eq 0 ]
+  wait_free "$FE_BASE"
+  wait_free "$BE_BASE"
+  wait_tree_gone
+  [ "$(tree_count)" = 0 ]     # BOTH trees reaped
+}
+
 # --- idempotency ------------------------------------------------------------
 
 @test "fake: re-up is idempotent — a second 'up' says already-up and spawns no duplicate" {
