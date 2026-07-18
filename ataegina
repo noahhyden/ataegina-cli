@@ -606,6 +606,8 @@ ate_start_backend() {
     # Record the launched pid so `down` can stop it even before it binds the port
     # (dependency sync / first compile) — port-only teardown misses that window.
     echo $! > "$DEV_LOG_DIR/backend.pid"
+    # Record its start-time too, so `down` can tell OUR pid from a recycled one.
+    ate_pid_starttime "$!" > "$DEV_LOG_DIR/backend.pidstart" 2>/dev/null || true
     disown )
   echo "backend  -> $BACKEND_URL  (log: $DEV_LOG_DIR/backend.log)"
 }
@@ -623,6 +625,8 @@ ate_start_frontend() {
     # Record the launched pid so `down` can stop it even before it binds the port
     # (dependency install / first compile) — port-only teardown misses that window.
     echo $! > "$DEV_LOG_DIR/frontend.pid"
+    # Record its start-time too, so `down` can tell OUR pid from a recycled one.
+    ate_pid_starttime "$!" > "$DEV_LOG_DIR/frontend.pidstart" 2>/dev/null || true
     disown )
   echo "frontend -> http://localhost:$FRONTEND_PORT  (log: $DEV_LOG_DIR/frontend.log)"
 }
@@ -637,6 +641,16 @@ ate_start_frontend() {
 # only the port holder (or only the recorded wrapper pid) orphaned those children;
 # they reparented to init and kept their memory, so every up/down cycle leaked one
 # — the "processes pile up untracked" drain the tool is meant to prevent.
+# A stable per-process start-time token, used to detect PID REUSE: a pid we recorded
+# at `up` may, after that process dies, be recycled by the OS for an UNRELATED process
+# before `down` runs — and then killing "our" recorded pid (and, since down walks its
+# tree, its whole tree) would take down the innocent process. Comparing the recorded
+# start-time to the pid's current one catches that. `ps -o lstart=` is portable (Linux
+# and macOS/BSD); empty if unavailable, in which case the caller simply skips the check.
+ate_pid_starttime() {
+  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'
+}
+
 ate_pid_tree() {
   local snap queue="$1" out="" cur kids
   snap="$(ps -Ao pid=,ppid= 2>/dev/null || true)"
@@ -661,11 +675,24 @@ ate_pid_tree() {
 _ate_stop_port() {
   local label="$1" port="$2" stopped=0 roots="" pid targets
   roots="$(ate_port_pids "$port" | tr '\n' ' ')"
-  local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid
+  local pidfile="${DEV_LOG_DIR:-}/$label.pid" startfile="${DEV_LOG_DIR:-}/$label.pidstart" lpid
   if [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ]; then
     lpid="$(cat "$pidfile" 2>/dev/null || true)"
+    # PID-reuse guard: if we recorded this pid's start-time at `up` and the pid is
+    # still alive but its start-time no longer matches, the id was recycled for an
+    # UNRELATED process since — do NOT adopt it as a kill root (which would reap that
+    # innocent process's whole tree). No record, or a matching one, means it's ours.
+    if [ -n "$lpid" ] && [ -f "$startfile" ]; then
+      local want got
+      want="$(cat "$startfile" 2>/dev/null || true)"
+      got="$(ate_pid_starttime "$lpid")"
+      if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
+        echo "$label: recorded pid $lpid was recycled by another process — not touching it" >&2
+        lpid=""
+      fi
+    fi
     [ -n "$lpid" ] && roots="$roots $lpid"
-    rm -f "$pidfile"
+    rm -f "$pidfile" "$startfile"
   fi
   targets=""
   for pid in $roots; do
