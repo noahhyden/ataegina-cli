@@ -1839,7 +1839,12 @@ fi
 # Anchor on the worktree the user is standing in, NOT where this script lives.
 TREE="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "ataegina: not inside a git worktree" >&2; exit 1; }
-PRIMARY="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
+# The first `worktree ` line of the porcelain output is the primary checkout. Take
+# everything after the "worktree " prefix rather than the 2nd whitespace field: a
+# repo path can contain SPACES (macOS "~/My Project", cloud-synced dirs), which
+# `awk '{print $2}'` would truncate at the first space — that made TREE != PRIMARY
+# even in the primary checkout, so it lost index 0 (its shared DB + base ports).
+PRIMARY="$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -n1)"
 PRIMARY="${PRIMARY:-$TREE}"
 
 # init runs before config load (it writes the config) and before index
@@ -1888,12 +1893,34 @@ resolve_index() {
   local existing
   existing="$(awk -F'\t' -v p="$TREE" '$2==p{print $1; exit}' "$REGISTRY")"
   if [ -n "$existing" ]; then echo "$existing"; return; fi
-  local n=1
-  while awk -F'\t' -v i="$n" '$1==i{found=1} END{exit !found}' "$REGISTRY"; do
-    n=$((n + 1))
+
+  # Claim a free index under an exclusive lock. WITHOUT this, two worktrees running
+  # their first `up` concurrently both scan the registry, both find the same lowest
+  # free N, and both take it -> two trees share an index => identical derived ports
+  # AND the same per-worktree DB name: the exact collision this tool exists to
+  # prevent, in its headline "fleet of parallel agents" use case. `mkdir` is an
+  # atomic mutex on any POSIX filesystem (portable; `flock` is Linux-only / absent on
+  # macOS). Bounded spin then proceed best-effort, so a dead lock holder can never
+  # deadlock us; the leaked lock dir self-heals once we (or anyone) rmdir it.
+  local lockdir="$REGISTRY.lock" tries=0
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge 500 ]; then break; fi     # ~10s ceiling, then proceed anyway
+    sleep 0.02 2>/dev/null || sleep 1
   done
-  printf '%s\t%s\n' "$n" "$TREE" >> "$REGISTRY"
-  echo "$n"
+  # Double-checked: another process may have registered THIS tree while we waited on
+  # the lock; if so, reuse that index instead of appending a duplicate row.
+  existing="$(awk -F'\t' -v p="$TREE" '$2==p{print $1; exit}' "$REGISTRY")"
+  if [ -z "$existing" ]; then
+    local n=1
+    while awk -F'\t' -v i="$n" '$1==i{found=1} END{exit !found}' "$REGISTRY"; do
+      n=$((n + 1))
+    done
+    printf '%s\t%s\n' "$n" "$TREE" >> "$REGISTRY"
+    existing="$n"
+  fi
+  rmdir "$lockdir" 2>/dev/null || true
+  echo "$existing"
 }
 
 N="$(resolve_index)"
