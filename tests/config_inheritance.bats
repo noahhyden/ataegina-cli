@@ -25,8 +25,15 @@ teardown() { common_teardown; }
   cd "$wt"
   run ate doctor
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "config: loaded $repo/ataegina.config.sh"
-  # Config really took effect: DB name derives per-worktree from the inherited DB_NAME.
+  # A config loaded, and it is NOT the worktree's own (it has none) — so it came from
+  # the primary. (Assert on the /ataegina.config.sh suffix, not an exact primary path:
+  # macOS resolves /tmp -> /private/tmp, so git's PRIMARY path is spelled differently
+  # than the test's $repo, though it is the same file.)
+  echo "$output" | grep -q "config: loaded .*/ataegina.config.sh"
+  ! echo "$output" | grep -q "config: loaded $wt/ataegina.config.sh"
+  # Config really took effect: DB name derives per-worktree from the inherited DB_NAME
+  # (the worktree has no config and there is no global one, so this can only be the
+  # primary's DB_NAME=shop) — the functional proof of inheritance.
   run ate db name
   [ "$output" = "shop_wt1" ]
   # And the backend is considered configured (would fail "no backend configured" before).
