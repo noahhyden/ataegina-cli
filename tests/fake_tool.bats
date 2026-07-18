@@ -316,3 +316,20 @@ mock_repo() {
   grep -q "BACKEND_URL=http://localhost:$BE_BASE" "$out"
   grep -q "MOCK_CUSTOM=hi_$BE_BASE" "$out"
 }
+
+@test "fake: a BACKEND_ENV value with spaces and '=' (double-quoted) reaches the process intact" {
+  local repo="$ATE_TMP/repo" out="$ATE_TMP/env.out"
+  # ataegina parses *_ENV via `eval "export $(… | tr '\n;' ' ')"`. A double-quoted
+  # value must survive that eval with its spaces and embedded '=' intact — the
+  # realistic case being a flag string or a URL with query params.
+  mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_ENV_OUT=$out; MOCK_CUSTOM=\"hello world=x&y=z\""
+  cd "$repo"
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  wait_listening "$BE_BASE"
+  ate down backend >/dev/null 2>&1 || true
+
+  [ -f "$out" ]
+  grep -q "MOCK_CUSTOM=hello world=x&y=z" "$out"
+}
