@@ -11,6 +11,8 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-18
+
 ### Fixed
 
 - **`down` no longer leaks worker/child processes (the "processes pile up"
@@ -231,4 +233,5 @@ line but were not separately git-tagged.
   PATH, registry, config, runnable surfaces, port availability, URLs) usable as a
   CI gate.
 
+[0.6.0]: https://github.com/noahhyden/ataegina-cli/releases/tag/v0.6.0
 [0.5.0]: https://github.com/noahhyden/ataegina-cli/releases/tag/v0.5.0

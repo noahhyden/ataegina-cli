@@ -205,6 +205,7 @@ always).
 | `ataegina logs [both\|backend\|frontend] [-n N] [--no-follow]` | Follow this tree's server logs live (scoped to the current worktree) |
 | `ataegina db [name\|url\|create\|drop]` | Inspect/manage this tree's database (when `DB_NAME` is set) |
 | `ataegina ports` | Print this tree's index, ports, and urls |
+| `ataegina move N` | Relocate this worktree to index `N` (and its derived port slot); stops the old slot's servers, refuses an index another live worktree holds, and rejects index 0 |
 | `ataegina list` | List every registered worktree (flags stale entries) |
 | `ataegina prune` | Drop registry entries whose worktree directory is gone |
 | `ataegina doctor` | Run read-only diagnostics for this tree (never mutates; nonzero exit on a hard failure, so it works as a CI gate) |
@@ -251,6 +252,13 @@ single explicit registry file (shared across repos) instead.
 **Index recycling.** Deleting a worktree does not clear its registry entry, so
 slots slowly accumulate. `list` flags entries whose path no longer exists;
 `prune` removes them, freeing those indices for the next new worktree to reuse.
+
+**Relocating a worktree.** If an auto-assigned slot lands on a port some other
+process permanently holds (so the derived port can never bind), `ataegina move N`
+moves this worktree to index `N` and its port pair, rewriting the registry. It
+stops the old slot's servers first (so nothing orphans on the old ports),
+refuses an index another live worktree already holds, rejects index 0 (reserved
+for the primary), and warns if either new port is already in use.
 
 **You own the servers, but you rarely write bash.** ataegina does not assume a
 stack. It exports a small, predictable environment, then starts each server:
