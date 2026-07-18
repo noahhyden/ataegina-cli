@@ -1,0 +1,3 @@
+# The generated playground (mock repos, worktrees, isolated registry + logs) is
+# throwaway state — never committed. Regenerate with `bash sandbox/setup.sh`.
+.work/
