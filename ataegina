@@ -1861,6 +1861,11 @@ cmd_up() {
   # "here's a URL, good luck" into an honest "ready" / "still starting" signal.
   [ "$did_be" = 1 ] && ate_report_ready "backend"  "$BE_PORT" "$BACKEND_URL"
   [ "$did_fe" = 1 ] && ate_report_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"
+  # Explicit success: without this the function returns the status of the last test
+  # above, which is FALSE whenever no frontend was started (scope backend/none) — and
+  # `set -e` at the `cmd_up` call site would then abort `up` with exit 1 despite a
+  # fully successful start. (Same set -e + falsy-last-statement trap as emit_config.)
+  return 0
 }
 
 # A bare `ataegina` (no args) prints usage and exits at the top-level case above,
