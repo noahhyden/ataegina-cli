@@ -32,12 +32,10 @@ setup() {
   BE_BASE=$((47100 + BATS_TEST_NUMBER))
 }
 teardown() {
-  # Reap only THIS test's tree — and NEVER run pkill with an empty/short pattern
-  # (belt-and-suspenders against the empty-pattern footgun above; `pkill -f ""`
-  # would kill every process the user owns).
-  if [ -n "${TAG:-}" ] && [ "${#TAG}" -ge 8 ]; then
-    pkill -f "$TAG" 2>/dev/null || true
-  fi
+  # Reap only THIS test's tree via the guarded helper, which refuses an empty or
+  # short tag (so a session-killing `pkill -f ""` can never happen). No test file
+  # calls pkill/pgrep directly — harness_safety.bats enforces that.
+  ate_reap_tag "${TAG:-}"
   common_teardown
 }
 
@@ -49,12 +47,9 @@ listening() {
 wait_listening() { local p="$1" i=0; while [ "$i" -lt 40 ]; do listening "$p" && return 0; sleep 0.25; i=$((i+1)); done; return 1; }
 wait_free()      { local p="$1" i=0; while [ "$i" -lt 40 ]; do listening "$p" || return 0; sleep 0.25; i=$((i+1)); done; return 1; }
 
-# Count live processes carrying this test's tag (the whole mock tree). Refuses an
-# empty/short tag so a bare `pgrep -f ""` (matches every process) can never happen.
-tree_count() {
-  if [ -z "${TAG:-}" ] || [ "${#TAG}" -lt 8 ]; then echo 0; return 0; fi
-  pgrep -f "$TAG" 2>/dev/null | wc -l | tr -d ' '
-}
+# Count live processes carrying this test's tag (the whole mock tree), via the
+# guarded helper (refuses an empty/short tag, so no bare `pgrep -f ""` is possible).
+tree_count() { ate_count_tag "${TAG:-}"; }
 wait_tree_gone() { local i=0; while [ "$i" -lt 40 ]; do [ "$(tree_count)" = 0 ] && return 0; sleep 0.25; i=$((i+1)); done; return 1; }
 
 # Configure a repo whose backend is the fake tool, carrying $extra_env into it.

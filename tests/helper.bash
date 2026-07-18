@@ -89,3 +89,39 @@ write_config() {
   local dir="$1"; shift
   printf '%s\n' "$@" > "$dir/ataegina.config.sh"
 }
+
+# ---------------------------------------------------------------------------
+# Safe process reaping for integration tests.
+#
+# Tests that start REAL processes must reap them, but pattern-based killing is a
+# session-killing footgun: `pkill -f "$tag"` with an EMPTY tag becomes
+# `pkill -f ""`, whose empty pattern matches EVERY command line — it SIGTERMs
+# every process the user owns (shell, editor, desktop). That is exactly how an
+# earlier draft of the fake-tool suite froze a laptop.
+#
+# So ALL reaping/counting goes through these two guarded helpers, and no .bats
+# file is allowed to call pkill/pgrep by pattern directly (enforced by
+# harness_safety.bats). Both REFUSE an empty or too-short tag, and both target a
+# SPECIFIC, unique tag only — never a broad pattern.
+
+# Reap every process whose command line contains the (specific, non-empty) tag.
+# Kills per-PID; refuses an unsafe tag with a loud message and no kill.
+ate_reap_tag() {
+  local tag="${1:-}" pid
+  if [ -z "$tag" ] || [ "${#tag}" -lt 8 ]; then
+    echo "ate_reap_tag: refusing unsafe tag '$tag' (empty/short) — not killing anything" >&2
+    return 0
+  fi
+  for pid in $(pgrep -f "$tag" 2>/dev/null || true); do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill "$pid" 2>/dev/null || true
+  done
+}
+
+# Count live processes whose command line contains the (specific, non-empty) tag.
+# Refuses an unsafe tag by returning 0 (never a bare `pgrep -f ""`).
+ate_count_tag() {
+  local tag="${1:-}"
+  if [ -z "$tag" ] || [ "${#tag}" -lt 8 ]; then echo 0; return 0; fi
+  pgrep -f "$tag" 2>/dev/null | grep -c '^[0-9]' || true
+}
