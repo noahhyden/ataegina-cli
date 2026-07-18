@@ -31,12 +31,30 @@ or the `ss`/`fuser`/`proc` fallback). Keep it that way.
 
 ## Testing
 
-Run the bats suite before sending a change: `bats tests/`. It is hermetic
-(driven by a temp registry and `ATE_PORT_TOOL=none`, so it needs no servers,
-databases, or network) and runs on macOS system bash 3.2 and on Linux; CI runs
-it on both. `shellcheck ataegina` should also stay clean (see the exclusion list
-in `.github/workflows/ci.yml`).
+The suite has three tiers. The default run is hermetic; the heavier tiers are
+opt-in so day-to-day `bats tests/` stays fast and needs no servers or network.
 
-For anything the suite does not cover, a quick manual pass still helps: create a
-couple of throwaway worktrees, run `ataegina up`, `ports`, `list`, and `prune`,
-and confirm indices and ports are stable and recycled correctly.
+**Unit (default).** `bats tests/` — hermetic: a temp registry and
+`ATE_PORT_TOOL=none`, no servers, databases, or network. Runs on macOS system
+bash 3.2 and on Linux; CI runs it on both. Always run this before sending a
+change. Integration and docker tests below skip automatically here.
+
+**Integration (real processes).** `ATE_TEST_INTEGRATION=1 bats tests/` — also
+runs the tests that start REAL dev-server processes (python/node/go) and exercise
+the full `up`/`down` lifecycle, port binding, env injection, the two-worktree
+end-to-end, `move`, and `logs`. Still network-free. Needs `python3` (and `node` /
+`go` for those cases) and a port tool (`lsof` or `ss`); individual tests skip if a
+runtime is missing. CI runs this as the `integration` job.
+
+**Docker (live DB engines).** `ATE_TEST_INTEGRATION=1 ATE_TEST_DOCKER=1 bats tests/`
+— additionally runs the per-worktree database tests against live **postgres** and
+**mysql** containers (create/drop/isolation, and `up` auto-create). Needs docker;
+implies pulling images (network), so it is **local-only** — CI does not run it, to
+keep CI network-free. Each docker test skips cleanly when docker is unavailable.
+
+To run just one tier's new file, e.g.: `ATE_TEST_INTEGRATION=1 bats tests/flagship_e2e.bats`.
+
+`shellcheck ataegina` should stay clean (see the exclusion list in
+`.github/workflows/ci.yml`), and any change to `ataegina` must be followed by
+regenerating its checksum so `release-verify` passes:
+`shasum -a 256 ataegina > ataegina.sha256` (or `sha256sum`).
