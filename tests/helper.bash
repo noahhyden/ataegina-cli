@@ -125,3 +125,21 @@ ate_count_tag() {
   if [ -z "$tag" ] || [ "${#tag}" -lt 8 ]; then echo 0; return 0; fi
   pgrep -f "$tag" 2>/dev/null | grep -c '^[0-9]' || true
 }
+
+# True (0) iff some live process whose command line contains $child_tag has a
+# PARENT whose command line contains $parent_tag — i.e. a real tree-depth edge.
+# Lets a test assert genuine process-tree DEPTH rather than mere breadth. Both
+# tags are required non-empty + specific; returns 1 (false) otherwise.
+ate_tag_is_child_of() {
+  local child_tag="${1:-}" parent_tag="${2:-}" cpid ppid pargs
+  { [ -n "$child_tag" ] && [ "${#child_tag}" -ge 8 ] \
+    && [ -n "$parent_tag" ] && [ "${#parent_tag}" -ge 8 ]; } || return 1
+  for cpid in $(pgrep -f "$child_tag" 2>/dev/null || true); do
+    case "$cpid" in ''|*[!0-9]*) continue ;; esac
+    ppid="$(ps -o ppid= -p "$cpid" 2>/dev/null | tr -d ' ')"
+    [ -n "$ppid" ] || continue
+    pargs="$(ps -o args= -p "$ppid" 2>/dev/null || true)"
+    case "$pargs" in *"$parent_tag"*) return 0 ;; esac
+  done
+  return 1
+}

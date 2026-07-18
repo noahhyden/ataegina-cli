@@ -141,6 +141,10 @@ mock_repo() {
   [ "$status" -eq 0 ]
   wait_listening "$BE_BASE"
   [ "$(tree_count)" -ge 5 ]   # wrapper + 2 workers + 2 grandchildren + listener
+  # Prove the tree really has DEPTH (grandchild's parent is a worker, not the
+  # wrapper) — otherwise this degrades into a breadth-only test and ate_pid_tree's
+  # descent is never exercised.
+  ate_tag_is_child_of "${TAG}-grandchild" "${TAG}-worker"
 
   ate down backend
   wait_tree_gone

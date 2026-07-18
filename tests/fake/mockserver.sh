@@ -75,19 +75,23 @@ fi
 # A worker child that never touches the port. It sleeps forever under a
 # recognizable arg so ps/pgrep can find it. This is the process that used to leak
 # on every up/down cycle when teardown only killed the port holder.
+#
+# With MOCK_GRANDCHILD=1 the worker forks its OWN child FIRST and then becomes
+# `sleep` via exec — so the grandchild's parent is the worker, not this wrapper.
+# That yields a real 2-level tree (wrapper -> worker -> grandchild) which forces
+# ataegina's ate_pid_tree BFS to actually descend; an earlier version forked the
+# "grandchild" from the wrapper too, making it a sibling and testing only breadth.
 spawn_worker() {
   local n="$1"
-  # exec into sleep via a marker so the arg carries $TAG for pgrep-based teardown.
-  (
-    exec -a "${TAG}-worker-${n}" sleep 100000
-  ) &
-  local w=$!
-  log "worker $n pid=$w"
   if [ "${MOCK_GRANDCHILD:-0}" = "1" ]; then
     (
-      exec -a "${TAG}-grandchild-${n}" sleep 100000
+      ( exec -a "${TAG}-grandchild-${n}" sleep 100000 ) &   # child OF the worker
+      exec -a "${TAG}-worker-${n}" sleep 100000
     ) &
-    log "grandchild $n pid=$!"
+    log "worker+grandchild $n pid=$!"
+  else
+    ( exec -a "${TAG}-worker-${n}" sleep 100000 ) &
+    log "worker $n pid=$!"
   fi
 }
 
