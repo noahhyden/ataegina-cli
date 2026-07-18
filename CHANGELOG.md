@@ -13,10 +13,60 @@ line but were not separately git-tagged.
 
 ### Fixed
 
+- **`down` no longer leaks worker/child processes (the "processes pile up"
+  drain).** Teardown killed only the recorded launch pid and, when a port tool
+  was present, the single port holder — so a dev server's worker/helper children
+  (uvicorn `--reload`, vite/esbuild, webpack/turbopack workers, a supervisor
+  above the port holder) were orphaned and kept their memory, leaking one per
+  up/down cycle; on hosts without lsof/ss/fuser *nothing but the wrapper* was
+  killed. `down` now enumerates the full process tree under each root from a
+  single portable `ps` snapshot before killing, `SIGTERM`s it, then `SIGKILL`s
+  survivors, independent of any port tool. Covered by `tests/teardown_orphans.bats`.
+- **Concurrent first-`up` no longer races two worktrees onto the same index.**
+  `resolve_index` scanned then appended the registry with no lock, so parallel
+  worktrees could take the same index → identical ports *and* the same
+  per-worktree database. Now serialized with an atomic `mkdir` lock (portable;
+  `flock` is Linux-only) plus a double-checked re-read. `tests/concurrency.bats`.
+- **A repo path containing a space no longer costs the primary its index 0.**
+  `PRIMARY` was parsed with `awk '{print $2}'`, truncating a spaced path at the
+  first space, so the primary checkout was misidentified and assigned a nonzero
+  index (nonzero ports, and — with a DB configured — a suffixed DB instead of the
+  shared one). Parsed with `sed` now. `tests/spaces_in_path.bats`.
+- **Linked worktrees inherit the primary checkout's config.** The (naturally
+  `.gitignore`d) config is not copied into a `git worktree add` tree, so a fresh
+  worktree had none and `up`/`db` failed with "no backend/database configured".
+  `load_config` now falls back to `<primary>/ataegina.config.sh` (the worktree's
+  own config still wins). `tests/config_inheritance.bats`.
+- **`up` exits 0 on a successful start with no frontend** (scope `backend`/`none`).
+  A falsy trailing test made `cmd_up` return 1 under `set -e`, aborting `up` with
+  exit 1 despite success (broke `ate up backend && …` and CI). `tests/up_exit_code.bats`.
+- **`up` distinguishes a dead server from a slow one.** The readiness report said
+  "still starting (first run can be slow)" even when the launched process had
+  already died (bad command, missing dependency, crash); it now reports
+  "FAILED to start — see &lt;log&gt;" for a dead pid. `tests/up_diagnostics.bats`.
+- **`move`/`up` refuse an index whose derived port exceeds 65535** instead of
+  assigning a slot whose servers can never bind. `tests/port_bounds.bats`.
+- **`down` won't kill a recycled pid.** `up` records the launched pid's start-time;
+  `down` skips a recorded pid whose start-time no longer matches (the id was reused
+  for an unrelated process). `tests/pid_reuse.bats`.
+- **`move` frees the old slot's servers itself.** It told you to run `down` to free
+  the old ports, but `down` resolves the *new* index after the move and never reached
+  them — orphaning the old servers on the old ports. `move` now stops the old slot
+  before rewriting the registry (old index/ports/log dir are still in scope). Covered
+  by `tests/move_real.bats`.
 - `ataegina down` is no longer silent on success: each side now reports
   `<label>: stopped on :<port>` when it actually stops something, instead of
   printing nothing (only the "nothing to stop" path spoke before). Covered by
   `tests/down.bats`.
+
+### Testing
+
+- The suite grew from 44 to 98 tests, adding the first coverage that starts real
+  processes and runs concurrently — real `up`/`down` lifecycle (python and node
+  backends), a full two-worktree end-to-end (distinct ports + own databases,
+  simultaneously), real frontend-scope borrow of the shared backend, real `logs`,
+  and docker-gated integration against live **postgres** and **mysql** engines
+  (per-worktree create/drop/isolation) that skip cleanly where docker is absent.
 
 ### Added
 

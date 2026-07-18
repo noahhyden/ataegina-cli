@@ -24,6 +24,23 @@ ate() {
   bash "$ATE_SCRIPT" "$@"
 }
 
+# Gates for the tests that go beyond the hermetic unit suite. The default
+# `bats tests/` (what CI's fast unit jobs run) stays true to the project ethos —
+# no servers, databases, or network — by skipping these unless explicitly enabled:
+#
+#   ATE_TEST_INTEGRATION=1  run tests that start REAL processes (python/node/go
+#                           dev servers, real up/down lifecycle). No network.
+#   ATE_TEST_DOCKER=1       run tests that need docker + a live DB engine
+#                           (postgres/mysql containers). Implies network.
+integration_only() {
+  [ "${ATE_TEST_INTEGRATION:-0}" = "1" ] \
+    || skip "integration test (real processes) — set ATE_TEST_INTEGRATION=1 to run"
+}
+docker_only() {
+  [ "${ATE_TEST_DOCKER:-0}" = "1" ] \
+    || skip "docker integration test — set ATE_TEST_DOCKER=1 to run"
+}
+
 # Make a fresh, isolated temp dir for the test and point the registry at it.
 common_setup() {
   ATE_TMP="$(mktemp -d "${BATS_TMPDIR:-/tmp}/ate-test.XXXXXX")"

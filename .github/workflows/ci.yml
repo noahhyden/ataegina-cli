@@ -67,6 +67,29 @@ jobs:
         run: bats tests/
 
   # ---------------------------------------------------------------------------
+  # Integration: the opt-in tests that start REAL processes (python/node/go dev
+  # servers, real up/down lifecycle, the two-worktree end-to-end). Gated behind
+  # ATE_TEST_INTEGRATION so the unit jobs above stay hermetic and fast. This job
+  # stays network-free — it does NOT set ATE_TEST_DOCKER, so the docker/live-DB
+  # tests (postgres/mysql) remain local-only and nothing is pulled here. The
+  # runtimes (python3, node, go) are preinstalled on the runner.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats-core
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Configure a throwaway git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ate ci"
+      - name: Run the integration tests (real processes; no docker)
+        env:
+          ATE_TEST_INTEGRATION: "1"
+        run: bats tests/
+
+  # ---------------------------------------------------------------------------
   # Assert the macOS job actually exercises the system bash 3.2 (the floor the
   # project targets). The Homebrew bash 5 is NOT on PATH as `bash` by default on
   # the macOS runner, but we make the requirement explicit: /bin/bash must be a

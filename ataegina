@@ -606,6 +606,8 @@ ate_start_backend() {
     # Record the launched pid so `down` can stop it even before it binds the port
     # (dependency sync / first compile) — port-only teardown misses that window.
     echo $! > "$DEV_LOG_DIR/backend.pid"
+    # Record its start-time too, so `down` can tell OUR pid from a recycled one.
+    ate_pid_starttime "$!" > "$DEV_LOG_DIR/backend.pidstart" 2>/dev/null || true
     disown )
   echo "backend  -> $BACKEND_URL  (log: $DEV_LOG_DIR/backend.log)"
 }
@@ -623,30 +625,98 @@ ate_start_frontend() {
     # Record the launched pid so `down` can stop it even before it binds the port
     # (dependency install / first compile) — port-only teardown misses that window.
     echo $! > "$DEV_LOG_DIR/frontend.pid"
+    # Record its start-time too, so `down` can tell OUR pid from a recycled one.
+    ate_pid_starttime "$!" > "$DEV_LOG_DIR/frontend.pidstart" 2>/dev/null || true
     disown )
   echo "frontend -> http://localhost:$FRONTEND_PORT  (log: $DEV_LOG_DIR/frontend.log)"
 }
 
-# Kill whatever holds a port. Pids come from the resolved port backend; when it
-# cannot map pids (proc/none, or nothing listening) we say so instead of failing.
+# Print PID plus every descendant of it, one per line, from a SINGLE ps snapshot
+# (consistent tree; no per-node re-shelling). Iterative BFS so it is bash-3.2-safe
+# and set -e-safe; portable ps (-Ao pid=,ppid= works on Linux and macOS/BSD).
+#
+# This is what lets `down` reap the worker/helper processes a dev server spawns but
+# that never hold the listening socket — uvicorn --reload (reloader + worker),
+# next dev / vite / esbuild, webpack/turbopack workers, a process manager. Killing
+# only the port holder (or only the recorded wrapper pid) orphaned those children;
+# they reparented to init and kept their memory, so every up/down cycle leaked one
+# — the "processes pile up untracked" drain the tool is meant to prevent.
+# A stable per-process start-time token, used to detect PID REUSE: a pid we recorded
+# at `up` may, after that process dies, be recycled by the OS for an UNRELATED process
+# before `down` runs — and then killing "our" recorded pid (and, since down walks its
+# tree, its whole tree) would take down the innocent process. Comparing the recorded
+# start-time to the pid's current one catches that. `ps -o lstart=` is portable (Linux
+# and macOS/BSD); empty if unavailable, in which case the caller simply skips the check.
+ate_pid_starttime() {
+  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'
+}
+
+ate_pid_tree() {
+  local snap queue="$1" out="" cur kids
+  snap="$(ps -Ao pid=,ppid= 2>/dev/null || true)"
+  while [ -n "$queue" ]; do
+    cur="${queue%% *}"
+    case "$queue" in *" "*) queue="${queue#* }" ;; *) queue="" ;; esac
+    [ -n "$cur" ] || continue
+    out="$out $cur"
+    kids="$(printf '%s\n' "$snap" | awk -v pp="$cur" '$2==pp{print $1}' | tr '\n' ' ')"
+    [ -n "$kids" ] && queue="$queue $kids"
+  done
+  # shellcheck disable=SC2086
+  printf '%s\n' $out | grep -E '^[0-9]+$' | sort -un || true
+}
+
+# Kill everything belonging to a side's server: whatever holds the port, the pid we
+# recorded at `up` (the launch wrapper — catches a server still starting, or a parent
+# supervisor ABOVE the port holder), and — crucially — the ENTIRE process tree under
+# each, so worker/helper children are reaped too. Trees are enumerated BEFORE any
+# kill (killing a parent first would reparent its children to init and hide them).
+# SIGTERM the set, brief grace, then SIGKILL any survivor.
 _ate_stop_port() {
-  local label="$1" port="$2" pids stopped=0
-  pids="$(ate_port_pids "$port")"
-  if [ -n "$pids" ]; then
-    printf '%s\n' "$pids" | xargs kill 2>/dev/null || true
-    stopped=1
-  fi
-  # Also stop a process WE launched (pid recorded at `up`) that may not be holding
-  # the port: still installing/compiling, bound a different interface, or crashed
-  # leaving a child. This is what keeps orphans from surviving `down`.
-  local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid
+  local label="$1" port="$2" stopped=0 roots="" pid targets
+  roots="$(ate_port_pids "$port" | tr '\n' ' ')"
+  local pidfile="${DEV_LOG_DIR:-}/$label.pid" startfile="${DEV_LOG_DIR:-}/$label.pidstart" lpid
   if [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ]; then
     lpid="$(cat "$pidfile" 2>/dev/null || true)"
-    if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
-      kill "$lpid" 2>/dev/null || true
-      stopped=1
+    # PID-reuse guard: if we recorded this pid's start-time at `up` and the pid is
+    # still alive but its start-time no longer matches, the id was recycled for an
+    # UNRELATED process since — do NOT adopt it as a kill root (which would reap that
+    # innocent process's whole tree). No record, or a matching one, means it's ours.
+    if [ -n "$lpid" ] && [ -f "$startfile" ]; then
+      local want got
+      want="$(cat "$startfile" 2>/dev/null || true)"
+      got="$(ate_pid_starttime "$lpid")"
+      if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
+        echo "$label: recorded pid $lpid was recycled by another process — not touching it" >&2
+        lpid=""
+      fi
     fi
-    rm -f "$pidfile"
+    [ -n "$lpid" ] && roots="$roots $lpid"
+    rm -f "$pidfile" "$startfile"
+  fi
+  targets=""
+  for pid in $roots; do
+    [ -n "$pid" ] || continue
+    targets="$targets $(ate_pid_tree "$pid" | tr '\n' ' ')"
+  done
+  # shellcheck disable=SC2086
+  targets="$(printf '%s\n' $targets | grep -E '^[0-9]+$' | sort -un | tr '\n' ' ' || true)"
+  if [ -n "${targets// /}" ]; then
+    # shellcheck disable=SC2086
+    kill $targets 2>/dev/null || true
+    stopped=1
+    local i=0 alive=""
+    while [ "$i" -lt 10 ]; do
+      alive=""
+      for pid in $targets; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
+      [ -z "${alive// /}" ] && break
+      sleep 0.1 2>/dev/null || sleep 1
+      i=$((i + 1))
+    done
+    if [ -n "${alive// /}" ]; then
+      # shellcheck disable=SC2086
+      kill -9 $alive 2>/dev/null || true
+    fi
   fi
   if [ "$stopped" = 1 ]; then echo "$label: stopped on :$port"; return 0; fi
   if ate_port_listening "$port"; then
@@ -664,9 +734,20 @@ ate_stop_frontend() { _ate_stop_port "frontend" "$FRONTEND_PORT"; }
 # first runs (dependency sync, initial compile); we point at the log instead.
 ate_report_ready() {
   local label="$1" port="$2" url="$3" i=0
+  # The pid we recorded at launch, so we can tell a SLOW start from a DEAD one.
+  local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid=""
+  [ -f "$pidfile" ] && lpid="$(cat "$pidfile" 2>/dev/null || true)"
   while [ "$i" -lt 8 ]; do
     if ate_port_listening "$port"; then
       log "  $label ready -> $url"
+      return 0
+    fi
+    # If what we launched has already exited without binding, it FAILED to start
+    # (bad command, missing dep, crash, invalid port). Say so — and point at the
+    # log — instead of the misleading "still starting", which left users staring at
+    # a server that was never coming up.
+    if [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then
+      log "  $label FAILED to start (process exited) — see ${DEV_LOG_DIR:-?}/$label.log"
       return 0
     fi
     sleep 1; i=$((i + 1))
@@ -929,9 +1010,22 @@ ate_task_scope_field() {
 # ---------------------------------------------------------------------------
 load_config() {
   local tree="$1" candidate
+  # Search order (first hit wins):
+  #   1. $ATE_CONFIG                    explicit override
+  #   2. <this worktree>/ataegina.config.sh
+  #   3. <PRIMARY checkout>/ataegina.config.sh
+  #   4. $REGISTRY_DIR/ataegina.config.sh   machine-wide default
+  # (3) is what makes the per-worktree workflow actually work: the config carries
+  # machine-specific ports/commands and so is naturally .gitignored, but git does NOT
+  # copy untracked files into a linked worktree — so a fresh worktree otherwise has NO
+  # config and `up` there failed with "no backend configured". Falling back to the
+  # primary checkout's config (the one the user ran `init` in) means every worktree
+  # inherits it and derives its own slot from its index, with no per-branch commit or
+  # global copy needed. The worktree's OWN config still wins if it has one.
   for candidate in \
     "${ATE_CONFIG:-}" \
     "$tree/ataegina.config.sh" \
+    "${PRIMARY:+$PRIMARY/ataegina.config.sh}" \
     "$REGISTRY_DIR/ataegina.config.sh"; do
     if [ -n "$candidate" ] && [ -f "$candidate" ]; then
       # shellcheck disable=SC1090
@@ -1743,6 +1837,14 @@ cmd_up() {
     shift
   done
 
+  # A TCP port must be <= 65535. If this tree's index puts a derived port past that
+  # (a huge ATE_INDEX override, or a very large registry index), fail with a clear
+  # message instead of letting the dev server die on an opaque out-of-range error.
+  if [ "$FE_PORT" -gt 65535 ] || [ "$BE_PORT" -gt 65535 ]; then
+    echo "ataegina up: index #$N derives a port past 65535 (frontend :$FE_PORT, backend :$BE_PORT); use 'ataegina move' to a smaller index" >&2
+    exit 2
+  fi
+
   mkdir -p "$LOG_DIR"
   log "worktree #$N  $TREE"
   log "  frontend :$FE_PORT   backend :$BE_PORT   logs $LOG_DIR"
@@ -1820,6 +1922,11 @@ cmd_up() {
   # "here's a URL, good luck" into an honest "ready" / "still starting" signal.
   [ "$did_be" = 1 ] && ate_report_ready "backend"  "$BE_PORT" "$BACKEND_URL"
   [ "$did_fe" = 1 ] && ate_report_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"
+  # Explicit success: without this the function returns the status of the last test
+  # above, which is FALSE whenever no frontend was started (scope backend/none) — and
+  # `set -e` at the `cmd_up` call site would then abort `up` with exit 1 despite a
+  # fully successful start. (Same set -e + falsy-last-statement trap as emit_config.)
+  return 0
 }
 
 # A bare `ataegina` (no args) prints usage and exits at the top-level case above,
@@ -1839,7 +1946,12 @@ fi
 # Anchor on the worktree the user is standing in, NOT where this script lives.
 TREE="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "ataegina: not inside a git worktree" >&2; exit 1; }
-PRIMARY="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
+# The first `worktree ` line of the porcelain output is the primary checkout. Take
+# everything after the "worktree " prefix rather than the 2nd whitespace field: a
+# repo path can contain SPACES (macOS "~/My Project", cloud-synced dirs), which
+# `awk '{print $2}'` would truncate at the first space — that made TREE != PRIMARY
+# even in the primary checkout, so it lost index 0 (its shared DB + base ports).
+PRIMARY="$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -n1)"
 PRIMARY="${PRIMARY:-$TREE}"
 
 # init runs before config load (it writes the config) and before index
@@ -1888,12 +2000,34 @@ resolve_index() {
   local existing
   existing="$(awk -F'\t' -v p="$TREE" '$2==p{print $1; exit}' "$REGISTRY")"
   if [ -n "$existing" ]; then echo "$existing"; return; fi
-  local n=1
-  while awk -F'\t' -v i="$n" '$1==i{found=1} END{exit !found}' "$REGISTRY"; do
-    n=$((n + 1))
+
+  # Claim a free index under an exclusive lock. WITHOUT this, two worktrees running
+  # their first `up` concurrently both scan the registry, both find the same lowest
+  # free N, and both take it -> two trees share an index => identical derived ports
+  # AND the same per-worktree DB name: the exact collision this tool exists to
+  # prevent, in its headline "fleet of parallel agents" use case. `mkdir` is an
+  # atomic mutex on any POSIX filesystem (portable; `flock` is Linux-only / absent on
+  # macOS). Bounded spin then proceed best-effort, so a dead lock holder can never
+  # deadlock us; the leaked lock dir self-heals once we (or anyone) rmdir it.
+  local lockdir="$REGISTRY.lock" tries=0
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge 500 ]; then break; fi     # ~10s ceiling, then proceed anyway
+    sleep 0.02 2>/dev/null || sleep 1
   done
-  printf '%s\t%s\n' "$n" "$TREE" >> "$REGISTRY"
-  echo "$n"
+  # Double-checked: another process may have registered THIS tree while we waited on
+  # the lock; if so, reuse that index instead of appending a duplicate row.
+  existing="$(awk -F'\t' -v p="$TREE" '$2==p{print $1; exit}' "$REGISTRY")"
+  if [ -z "$existing" ]; then
+    local n=1
+    while awk -F'\t' -v i="$n" '$1==i{found=1} END{exit !found}' "$REGISTRY"; do
+      n=$((n + 1))
+    done
+    printf '%s\t%s\n' "$n" "$TREE" >> "$REGISTRY"
+    existing="$n"
+  fi
+  rmdir "$lockdir" 2>/dev/null || true
+  echo "$existing"
 }
 
 N="$(resolve_index)"
@@ -2011,12 +2145,27 @@ case "$CMD" in
       echo "ataegina: index 0 is reserved for the primary checkout" >&2
       exit 2
     fi
+    # Derived ports are BASE+index; a TCP port must be <= 65535. Refuse a target that
+    # would push either past that, rather than assign a slot whose servers can never
+    # bind (the engine would just die with an out-of-range-port error at `up`).
+    if [ "$((FRONT_PORT_BASE + target))" -gt 65535 ] || [ "$((BACK_PORT_BASE + target))" -gt 65535 ]; then
+      echo "ataegina: index $target puts a port past 65535 (frontend $((FRONT_PORT_BASE + target)), backend $((BACK_PORT_BASE + target))); pick a smaller index" >&2
+      exit 2
+    fi
     holder="$(awk -F'\t' -v i="$target" '$1==i{print $2; exit}' "$REGISTRY" 2>/dev/null || true)"
     if [ -n "$holder" ] && [ "$holder" != "$TREE" ] && [ -d "$holder" ]; then
       echo "ataegina: index $target is already assigned to $holder" >&2
       echo "          pick a free index ('ataegina list' shows what's taken), or 'ataegina prune' if it's stale" >&2
       exit 2
     fi
+    # Free the OLD slot BEFORE relocating. Any servers this tree is running were
+    # launched under its CURRENT index — old ports (FE_PORT/BE_PORT) and old log dir
+    # (DEV_LOG_DIR). Once the registry points at the new index, a later `down` would
+    # resolve the NEW slot and never reach them, orphaning them on the old ports. Stop
+    # them here while the env still refers to the old slot. Stderr (the harmless
+    # "nothing to stop" when idle) is squelched; a real "stopped on :port" still shows.
+    ate_stop_frontend 2>/dev/null || true
+    ate_stop_backend  2>/dev/null || true
     # Rewrite the registry: drop any line for this tree AND any (stale) line
     # holding the target index, then append the new mapping.
     mkdir -p "$(dirname "$REGISTRY")"; touch "$REGISTRY"
@@ -2035,7 +2184,7 @@ case "$CMD" in
         echo "  warning: :$_p is already in use by $(ate_port_proc_desc "$_p") - this slot may be occupied too" >&2
       fi
     done
-    log "now run 'ataegina down' (frees the old ports), then 'ataegina up' on the new slot"
+    log "the old slot's servers (if any) were stopped; now run 'ataegina up' on the new slot"
     ;;
   doctor)
     # cmd_doctor may return nonzero on a hard [fail]; guard against set -e so we
