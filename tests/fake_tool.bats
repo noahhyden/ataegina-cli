@@ -190,6 +190,33 @@ mock_repo() {
   [ "$(tree_count)" = 0 ]                         # nothing leaked
 }
 
+@test "fake: up relaunches after the previous server was killed externally (crash recovery)" {
+  local repo="$ATE_TMP/repo"
+  mock_repo "$repo" "MOCK_TAG=$TAG"
+  cd "$repo"
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  wait_listening "$BE_BASE"
+
+  # Simulate a CRASH: kill the whole server tree out-of-band (not via `ate down`),
+  # so the recorded pidfile is left behind pointing at a now-dead launch pid — the
+  # case _ate_launch_in_progress must treat as "no launch in flight" so a fresh
+  # `up` recovers. (If the guard over-blocked here, up would say "already starting"
+  # and never relaunch, and wait_listening below would fail.)
+  ate_reap_tag "$TAG"
+  wait_free "$BE_BASE"
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  refute_output_has "already starting"       # must NOT think the dead one is still coming up
+  wait_listening "$BE_BASE"                    # a fresh server really came up
+
+  ate down backend
+  wait_free "$BE_BASE"
+  wait_tree_gone
+}
+
 # --- readiness: crash vs slow boot -----------------------------------------
 
 @test "fake: an immediately-crashing backend is reported FAILED (not 'still starting')" {
