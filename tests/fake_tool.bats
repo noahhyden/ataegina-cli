@@ -83,6 +83,31 @@ mock_repo() {
   wait_free "$BE_BASE"
 }
 
+# --- idempotency ------------------------------------------------------------
+
+@test "fake: re-up is idempotent — a second 'up' says already-up and spawns no duplicate" {
+  local repo="$ATE_TMP/repo"
+  mock_repo "$repo" "MOCK_TAG=$TAG"
+  cd "$repo"
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  wait_listening "$BE_BASE"
+  local before; before="$(tree_count)"
+  [ "$before" -ge 2 ]                 # at least the wrapper + the listener
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "already up"
+  # The port was already held, so no second server may be launched.
+  [ "$(tree_count)" -le "$before" ]
+
+  ate down backend
+  wait_free "$BE_BASE"
+  wait_tree_gone
+  [ "$(tree_count)" = 0 ]
+}
+
 # --- readiness: crash vs slow boot -----------------------------------------
 
 @test "fake: an immediately-crashing backend is reported FAILED (not 'still starting')" {
