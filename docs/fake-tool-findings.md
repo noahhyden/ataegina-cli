@@ -8,6 +8,26 @@ launcher that forks a daemon and exits, a failing DB engine, a foreign port hold
 
 This is the running log of what it turned up.
 
+## Running the harness
+
+```bash
+# Hermetic (no processes/ports/network) — the fake DB tests + the safety lint:
+bats tests/db_up.bats tests/harness_safety.bats
+
+# The fake dev-server probes start REAL processes and bind REAL ports, so they are
+# gated behind ATE_TEST_INTEGRATION (like the other real-process tests). Always wrap
+# in a hard timeout so a hung probe can't run away:
+timeout 150 env ATE_TEST_INTEGRATION=1 bats tests/fake_tool.bats
+```
+
+Safety notes for anyone extending it:
+- All process reaping goes through the guarded helpers in `tests/helper.bash`
+  (`ate_reap_tag` / `ate_count_tag`), which refuse an empty/short tag — never call
+  `pkill`/`pgrep` by pattern directly (a bare `pkill -f ""` matches every process
+  and can kill your session). `harness_safety.bats` enforces this.
+- Negative assertions must use `refute` / `refute_output_has` / `refute_alive`, not
+  `! cmd` (which bats' `set -e` silently ignores). `harness_safety.bats` enforces this.
+
 ## Fixed bugs
 
 ### 1. `ate down` aborted and leaked the port holder when the recorded pid was dead
