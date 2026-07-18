@@ -324,6 +324,34 @@ mock_repo() {
   [ "$(tree_count)" = 0 ]
 }
 
+# --- move relocates a still-booting server ---------------------------------
+
+@test "fake: move while the old server is still booting reaps it (no leak on the old slot)" {
+  local repo wt
+  repo="$(make_repo "$ATE_TMP/repo")"
+  cfg() {
+    write_config "$1" \
+      "FRONT_PORT_BASE=$FE_BASE" "BACK_PORT_BASE=$BE_BASE" \
+      "BACKEND_DIR='.'" "BACKEND_CMD='bash \"$MOCK\" $TAG'" \
+      "BACKEND_ENV='MOCK_TAG=$TAG; MOCK_BOOT_DELAY=14'"
+  }
+  cfg "$repo"
+  wt="$(add_worktree "$repo" wtA)"; cfg "$wt"
+  cd "$wt"
+
+  run ate up backend --scope backend      # index 1; boot 14s > readiness -> still starting
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "still starting"
+  [ "$(tree_count)" -ge 1 ]               # the old slot's wrapper is booting (unbound)
+
+  run ate move 5                           # relocate while it is still starting
+  [ "$status" -eq 0 ]
+  # move must reap the old, still-booting server via its pidfile (it never bound a
+  # port, so a port-only teardown would leak it on the old slot).
+  wait_tree_gone
+  [ "$(tree_count)" = 0 ]
+}
+
 # --- port holder outlives the recorded launch pid --------------------------
 
 @test "fake: down reaps the orphaned holder even after the recorded launch pid has died" {
