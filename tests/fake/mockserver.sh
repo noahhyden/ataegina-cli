@@ -29,6 +29,9 @@
 #                      (exercise tree reaping — orphan-leak detection).
 #   MOCK_GRANDCHILD    1 = each worker child forks its own child (deeper tree).
 #   MOCK_IGNORE_SIGTERM 1 = trap and IGNORE SIGTERM (force ataegina to escalate to KILL).
+#   MOCK_WRAPPER_EXITS 1 = after the listener binds, the WRAPPER exits 0, leaving the
+#                      listener orphaned and still holding the port. Exercises down's
+#                      port-holder path when the RECORDED launch pid is already dead.
 #   MOCK_TAG           marker string echoed to the log + used in child arg names so
 #                      teardown/pgrep can find every descendant. Default: mocksrv.
 #   MOCK_ENV_OUT       if set, write a few observed env vars to this file then continue
@@ -123,6 +126,17 @@ while True:
 PY
   LISTENER=$!
   log "listener pid=$LISTENER on :$PORT_TO_BIND"
+
+  # Abandon the listener: let it bind, then exit the wrapper so the process that
+  # ataegina RECORDED at launch is dead while the port holder lives on (orphaned
+  # to init). `down` must then reap it via the port, not the recorded pid.
+  if [ "${MOCK_WRAPPER_EXITS:-0}" = "1" ]; then
+    # Default 1s so the listener is bound before we abandon it (deterministic test);
+    # set MOCK_WRAPPER_EXIT_DELAY=0 to race the wrapper's death against the bind.
+    sleep "${MOCK_WRAPPER_EXIT_DELAY:-1}"
+    log "wrapper exiting; orphaned listener $LISTENER keeps :$PORT_TO_BIND"
+    exit 0
+  fi
 fi
 
 # Voluntary exit after a while (flaky-server simulation).

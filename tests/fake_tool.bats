@@ -195,6 +195,24 @@ mock_repo() {
   [ "$(tree_count)" = 0 ]
 }
 
+# --- port holder outlives the recorded launch pid --------------------------
+
+@test "fake: down frees the port when the launch wrapper already exited (orphaned holder)" {
+  local repo="$ATE_TMP/repo"
+  mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_WRAPPER_EXITS=1"
+  cd "$repo"
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  wait_listening "$BE_BASE"
+  # The wrapper (the pid ataegina recorded) has exited; only the orphaned listener
+  # holds the port now. down must still free it via the port-holder path.
+  ate down backend
+  wait_free "$BE_BASE"
+  wait_tree_gone
+  [ "$(tree_count)" = 0 ]
+}
+
 # --- env injection reaches the live process --------------------------------
 
 @test "fake: injected BACKEND_URL and a custom BACKEND_ENV reach the fake process" {
