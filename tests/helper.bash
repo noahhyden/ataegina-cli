@@ -104,6 +104,15 @@ write_config() {
 # harness_safety.bats). Both REFUSE an empty or too-short tag, and both target a
 # SPECIFIC, unique tag only — never a broad pattern.
 
+# Gating negative assertions for bats. bats runs test bodies under `set -e`, but a
+# `!`-prefixed command is EXEMPT from set -e — so a bare `! grep ...` / `! kill -0 ...`
+# in the MIDDLE of a test never fails it (it only gates when it happens to be the
+# last line, via the return status). That silent false-pass hid a real bug here.
+# These return non-zero as NON-negated commands, so set -e turns a violated
+# expectation into a real failure wherever they appear in the body.
+refute_output_has() { case "${output:-}" in *"$1"*) return 1 ;; *) return 0 ;; esac; }
+refute_alive()      { if kill -0 "$1" 2>/dev/null; then return 1; fi; return 0; }
+
 # Reap every process whose command line contains the (specific, non-empty) tag.
 # Kills per-PID; refuses an unsafe tag with a loud message and no kill.
 ate_reap_tag() {

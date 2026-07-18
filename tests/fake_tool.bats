@@ -46,6 +46,9 @@ listening() {
 }
 wait_listening() { local p="$1" i=0; while [ "$i" -lt 40 ]; do listening "$p" && return 0; sleep 0.25; i=$((i+1)); done; return 1; }
 wait_free()      { local p="$1" i=0; while [ "$i" -lt 40 ]; do listening "$p" || return 0; sleep 0.25; i=$((i+1)); done; return 1; }
+# Gating "port is NOT listening" — see refute_* in helper.bash for why `! listening`
+# would be a silent no-op mid-test.
+refute_listening() { if listening "$1"; then return 1; fi; return 0; }
 
 # Count live processes carrying this test's tag (the whole mock tree), via the
 # guarded helper (refuses an empty/short tag, so no bare `pgrep -f ""` is possible).
@@ -119,7 +122,7 @@ mock_repo() {
   [ "$status" -eq 0 ]
   # The launch pid exits before binding; readiness must call it out as FAILED.
   echo "$output" | grep -qi "FAILED to start"
-  ! listening "$BE_BASE"
+  refute_listening "$BE_BASE"
 }
 
 @test "fake: a slow-booting backend is reported 'still starting' (not FAILED)" {
@@ -132,10 +135,30 @@ mock_repo() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -qi "still starting"
   # A slow-but-alive server must NOT be misreported as dead.
-  ! echo "$output" | grep -qi "FAILED to start"
+  refute_output_has "FAILED to start"
 
   ate down backend >/dev/null 2>&1 || true
   wait_tree_gone
+}
+
+@test "fake: a daemonize-style start (wrapper exits before the child binds) is not reported FAILED" {
+  local repo="$ATE_TMP/repo"
+  # Wrapper exits at 0; the (orphaned) listener binds 1.5s later. The recorded
+  # launch pid is dead before the port is up — a dead launcher is NOT proof of
+  # failure when it forked the real server (daemonize). Readiness must give the
+  # port a grace window instead of declaring FAILED the instant the pid is gone.
+  mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_WRAPPER_EXITS=1; MOCK_WRAPPER_EXIT_DELAY=0; MOCK_LISTENER_BIND_DELAY=1.5"
+  cd "$repo"
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  refute_output_has "FAILED to start"   # the server really comes up
+  wait_listening "$BE_BASE"
+
+  ate down backend
+  wait_free "$BE_BASE"
+  wait_tree_gone
+  [ "$(tree_count)" = 0 ]
 }
 
 # --- process-tree reaping (the orphan-leak guarantee) ----------------------
@@ -216,7 +239,7 @@ mock_repo() {
   lpid="$(cat "$pidfile" 2>/dev/null || true)"
   [ -n "$lpid" ]
   while [ "$i" -lt 40 ] && kill -0 "$lpid" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
-  ! kill -0 "$lpid" 2>/dev/null            # recorded launch pid is now dead
+  refute_alive "$lpid"                     # recorded launch pid is now dead
 
   run ate down backend
   [ "$status" -eq 0 ]                       # down must not abort under set -e/pipefail

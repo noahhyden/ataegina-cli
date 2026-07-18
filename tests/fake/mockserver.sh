@@ -32,6 +32,12 @@
 #   MOCK_WRAPPER_EXITS 1 = after the listener binds, the WRAPPER exits 0, leaving the
 #                      listener orphaned and still holding the port. Exercises down's
 #                      port-holder path when the RECORDED launch pid is already dead.
+#   MOCK_WRAPPER_EXIT_DELAY seconds the wrapper waits after launching the listener
+#                      before it exits (default 1; used with MOCK_WRAPPER_EXITS).
+#   MOCK_LISTENER_BIND_DELAY seconds the LISTENER waits before binding the port,
+#                      independent of the wrapper's lifetime. With MOCK_WRAPPER_EXITS
+#                      + a 0 exit delay this makes the wrapper die BEFORE the child
+#                      binds — a daemonize-style launcher — to probe readiness.
 #   MOCK_TAG           marker string echoed to the log + used in child arg names so
 #                      teardown/pgrep can find every descendant. Default: mocksrv.
 #   MOCK_ENV_OUT       if set, write a few observed env vars to this file then continue
@@ -115,8 +121,14 @@ fi
 # just idle so the wrapper/worker tree stays alive for teardown tests.
 if [ "${MOCK_BIND:-1}" = "1" ] && [ "$PORT_TO_BIND" != "0" ]; then
   python3 - "$PORT_TO_BIND" "$TAG" <<'PY' &
-import socket, sys, time
+import socket, sys, time, os
 port = int(sys.argv[1])
+# Optional delay BEFORE binding, independent of the wrapper's lifetime. Lets a test
+# make the wrapper exit before the child binds (a daemonize-style launcher) in a
+# deterministic way, to probe ataegina's readiness reporting.
+d = float(os.environ.get("MOCK_LISTENER_BIND_DELAY", "0") or "0")
+if d:
+    time.sleep(d)
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", port))

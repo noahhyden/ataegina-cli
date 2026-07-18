@@ -752,7 +752,21 @@ ate_report_ready() {
     # (bad command, missing dep, crash, invalid port). Say so — and point at the
     # log — instead of the misleading "still starting", which left users staring at
     # a server that was never coming up.
+    #
+    # BUT a dead launch pid is not always failure: a launcher that FORKS the real
+    # server and exits (a daemonize-style start) leaves the recorded pid dead while
+    # the child is still binding. So don't declare failure the instant the pid is
+    # gone — give the port a brief grace to appear; only then is it truly dead.
     if [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then
+      local g=0
+      while [ "$g" -lt 15 ]; do
+        if ate_port_listening "$port"; then
+          log "  $label ready -> $url"
+          return 0
+        fi
+        sleep 0.2 2>/dev/null || sleep 1
+        g=$((g + 1))
+      done
       log "  $label FAILED to start (process exited) — see ${DEV_LOG_DIR:-?}/$label.log"
       return 0
     fi
