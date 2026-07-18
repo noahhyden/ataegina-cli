@@ -50,6 +50,19 @@ failure (a real crash still ends in FAILED; a slow server still says "still star
 Regression: `tests/fake_tool.bats` "a daemonize-style start … is not reported FAILED"
 (via `MOCK_WRAPPER_EXITS` + `MOCK_LISTENER_BIND_DELAY`).
 
+### 3. `up` double-launched (and leaked) during the boot window
+`ate_start_backend` / `ate_start_frontend` guarded only on `ate_port_listening`. During
+a **slow boot** — after `up` returns "still starting" but before the server binds its
+port — a second `up` saw the port free and launched a **second** server. The two race
+to bind; the pidfile is overwritten with the second launch's pid; the first wrapper is
+orphaned so `down` can no longer reap it — an untracked-process leak, the exact drain
+the tool exists to prevent. Fixed with `_ate_launch_in_progress`: if the recorded
+launch pid is still alive and still ours (same start-time guard `down` uses), the start
+hooks report "already starting" and do not relaunch (a dead/pid-reused record still
+allows a fresh start for crash recovery). Regression: `tests/fake_tool.bats` "re-up
+DURING a slow boot does not double-launch" (via `MOCK_BOOT_DELAY` beyond the readiness
+window).
+
 ## Test-suite defects found & fixed
 
 ### 3. `!`-prefixed assertions were silent no-ops
