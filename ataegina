@@ -648,7 +648,13 @@ ate_start_frontend() {
 # start-time to the pid's current one catches that. `ps -o lstart=` is portable (Linux
 # and macOS/BSD); empty if unavailable, in which case the caller simply skips the check.
 ate_pid_starttime() {
-  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'
+  # A DEAD pid makes `ps -p` exit non-zero; under `set -o pipefail` that fails the
+  # whole pipeline, and at a `got="$(ate_pid_starttime ...)"` call site `set -e`
+  # would then abort the caller — which made `ate down` bail out (leaking the port
+  # holder) whenever the pid it recorded at launch had already exited by teardown
+  # time (a wrapper that forks a server and exits: uvicorn --reload, next dev, a
+  # daemonizer). Tolerate it: a missing/dead pid simply yields the empty string.
+  { ps -o lstart= -p "$1" 2>/dev/null || true; } | sed 's/^ *//;s/ *$//'
 }
 
 ate_pid_tree() {

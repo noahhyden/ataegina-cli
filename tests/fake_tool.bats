@@ -197,17 +197,30 @@ mock_repo() {
 
 # --- port holder outlives the recorded launch pid --------------------------
 
-@test "fake: down frees the port when the launch wrapper already exited (orphaned holder)" {
+@test "fake: down reaps the orphaned holder even after the recorded launch pid has died" {
   local repo="$ATE_TMP/repo"
-  mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_WRAPPER_EXITS=1"
+  mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_WRAPPER_EXITS=1; MOCK_WRAPPER_EXIT_DELAY=1"
   cd "$repo"
 
   run ate up backend --scope backend
   [ "$status" -eq 0 ]
   wait_listening "$BE_BASE"
-  # The wrapper (the pid ataegina recorded) has exited; only the orphaned listener
-  # holds the port now. down must still free it via the port-holder path.
-  ate down backend
+
+  # Deterministically wait until the pid ataegina RECORDED at launch is dead, so
+  # `down` must reap via the port holder alone. This is the case that aborted down
+  # under `set -e`+`pipefail`: `ps` on a dead pid fails the pipeline in
+  # ate_pid_starttime, failing the `got="$(...)"` assignment and killing down
+  # before it reaped anything (leaking the port). Waiting for the death makes the
+  # regression deterministic instead of racing the wrapper's exit.
+  local pidfile="$ATE_TMP/logs/ate-wt0/backend.pid" lpid i=0
+  lpid="$(cat "$pidfile" 2>/dev/null || true)"
+  [ -n "$lpid" ]
+  while [ "$i" -lt 40 ] && kill -0 "$lpid" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
+  ! kill -0 "$lpid" 2>/dev/null            # recorded launch pid is now dead
+
+  run ate down backend
+  [ "$status" -eq 0 ]                       # down must not abort under set -e/pipefail
+  echo "$output" | grep -qi "stopped on"    # and must actually reap the holder
   wait_free "$BE_BASE"
   wait_tree_gone
   [ "$(tree_count)" = 0 ]
