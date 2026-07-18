@@ -162,6 +162,34 @@ mock_repo() {
   # to change it. Teardown reaps the squatter via its tag.
 }
 
+@test "fake: re-up DURING a slow boot does not double-launch (boot-window idempotency)" {
+  local repo="$ATE_TMP/repo"
+  # Boot 14s is well beyond the ~8s readiness window, so the first `up` returns
+  # "still starting" with the port NOT yet bound — the exact window in which a
+  # second `up` used to double-launch (guarding only on the port), orphaning the
+  # first wrapper and overwriting its pidfile so `down` could not reap it.
+  mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_BOOT_DELAY=14"
+  cd "$repo"
+  # Count only launch WRAPPERS (the `…/mockserver.sh <tag>` process + its sh parent),
+  # not the eventual listener — so this measures how many servers were launched.
+  wrapper_count() { ate_count_tag "mockserver.sh $TAG"; }
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "still starting"
+  local after1; after1="$(wrapper_count)"
+  [ "$after1" -ge 1 ]
+
+  run ate up backend --scope backend            # re-up while the first is still booting
+  [ "$status" -eq 0 ]
+  [ "$(wrapper_count)" -le "$after1" ]           # no SECOND launch
+
+  ate down backend
+  wait_free "$BE_BASE"
+  wait_tree_gone
+  [ "$(tree_count)" = 0 ]                         # nothing leaked
+}
+
 # --- readiness: crash vs slow boot -----------------------------------------
 
 @test "fake: an immediately-crashing backend is reported FAILED (not 'still starting')" {
