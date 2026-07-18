@@ -713,8 +713,10 @@ _ate_stop_port() {
       sleep 0.1 2>/dev/null || sleep 1
       i=$((i + 1))
     done
-    # shellcheck disable=SC2086
-    [ -n "${alive// /}" ] && kill -9 $alive 2>/dev/null || true
+    if [ -n "${alive// /}" ]; then
+      # shellcheck disable=SC2086
+      kill -9 $alive 2>/dev/null || true
+    fi
   fi
   if [ "$stopped" = 1 ]; then echo "$label: stopped on :$port"; return 0; fi
   if ate_port_listening "$port"; then
