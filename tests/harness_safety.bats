@@ -51,3 +51,22 @@ load helper
   run bash -c "grep -v '^[[:space:]]*#' '$f' | grep -nE '(kill|grep)[[:space:]]+-f'"
   [ "$status" -ne 0 ]   # no matches -> grep exits non-zero -> good
 }
+
+# Rule: no test may use a `!`-prefixed command as an assertion. bats runs bodies
+# under set -e, but a `!`-prefixed command is EXEMPT from it — so `! grep ...`
+# mid-body is a silent no-op that never fails the test. Negative assertions must go
+# through the gating helpers (refute / refute_output_has / refute_alive) instead.
+@test "harness safety: no test uses a set -e-exempt '!'-prefixed assertion" {
+  local f offenders=""
+  for f in "$BATS_TEST_DIRNAME"/*.bats; do
+    # A statement that STARTS with `!` (optionally indented). `while ! cond` and the
+    # like put the `!` mid-line, so anchoring at line start targets bare assertions.
+    if grep -nE '^[[:space:]]*![[:space:]]' "$f" >/dev/null 2>&1; then
+      offenders="$offenders $(basename "$f")"
+    fi
+  done
+  if [ -n "$offenders" ]; then
+    echo "'!'-prefixed assertions (use refute/refute_output_has/refute_alive):$offenders"
+    false
+  fi
+}
