@@ -49,6 +49,11 @@ line but were not separately git-tagged.
 - **`down` won't kill a recycled pid.** `up` records the launched pid's start-time;
   `down` skips a recorded pid whose start-time no longer matches (the id was reused
   for an unrelated process). `tests/pid_reuse.bats`.
+- **`move` frees the old slot's servers itself.** It told you to run `down` to free
+  the old ports, but `down` resolves the *new* index after the move and never reached
+  them — orphaning the old servers on the old ports. `move` now stops the old slot
+  before rewriting the registry (old index/ports/log dir are still in scope). Covered
+  by `tests/move_real.bats`.
 - `ataegina down` is no longer silent on success: each side now reports
   `<label>: stopped on :<port>` when it actually stops something, instead of
   printing nothing (only the "nothing to stop" path spoke before). Covered by

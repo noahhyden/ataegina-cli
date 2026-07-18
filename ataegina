@@ -2158,6 +2158,14 @@ case "$CMD" in
       echo "          pick a free index ('ataegina list' shows what's taken), or 'ataegina prune' if it's stale" >&2
       exit 2
     fi
+    # Free the OLD slot BEFORE relocating. Any servers this tree is running were
+    # launched under its CURRENT index — old ports (FE_PORT/BE_PORT) and old log dir
+    # (DEV_LOG_DIR). Once the registry points at the new index, a later `down` would
+    # resolve the NEW slot and never reach them, orphaning them on the old ports. Stop
+    # them here while the env still refers to the old slot. Stderr (the harmless
+    # "nothing to stop" when idle) is squelched; a real "stopped on :port" still shows.
+    ate_stop_frontend 2>/dev/null || true
+    ate_stop_backend  2>/dev/null || true
     # Rewrite the registry: drop any line for this tree AND any (stale) line
     # holding the target index, then append the new mapping.
     mkdir -p "$(dirname "$REGISTRY")"; touch "$REGISTRY"
@@ -2176,7 +2184,7 @@ case "$CMD" in
         echo "  warning: :$_p is already in use by $(ate_port_proc_desc "$_p") - this slot may be occupied too" >&2
       fi
     done
-    log "now run 'ataegina down' (frees the old ports), then 'ataegina up' on the new slot"
+    log "the old slot's servers (if any) were stopped; now run 'ataegina up' on the new slot"
     ;;
   doctor)
     # cmd_doctor may return nonzero on a hard [fail]; guard against set -e so we
