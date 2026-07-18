@@ -1795,6 +1795,14 @@ cmd_up() {
     shift
   done
 
+  # A TCP port must be <= 65535. If this tree's index puts a derived port past that
+  # (a huge ATE_INDEX override, or a very large registry index), fail with a clear
+  # message instead of letting the dev server die on an opaque out-of-range error.
+  if [ "$FE_PORT" -gt 65535 ] || [ "$BE_PORT" -gt 65535 ]; then
+    echo "ataegina up: index #$N derives a port past 65535 (frontend :$FE_PORT, backend :$BE_PORT); use 'ataegina move' to a smaller index" >&2
+    exit 2
+  fi
+
   mkdir -p "$LOG_DIR"
   log "worktree #$N  $TREE"
   log "  frontend :$FE_PORT   backend :$BE_PORT   logs $LOG_DIR"
@@ -2093,6 +2101,13 @@ case "$CMD" in
     esac
     if [ "$target" = 0 ]; then
       echo "ataegina: index 0 is reserved for the primary checkout" >&2
+      exit 2
+    fi
+    # Derived ports are BASE+index; a TCP port must be <= 65535. Refuse a target that
+    # would push either past that, rather than assign a slot whose servers can never
+    # bind (the engine would just die with an out-of-range-port error at `up`).
+    if [ "$((FRONT_PORT_BASE + target))" -gt 65535 ] || [ "$((BACK_PORT_BASE + target))" -gt 65535 ]; then
+      echo "ataegina: index $target puts a port past 65535 (frontend $((FRONT_PORT_BASE + target)), backend $((BACK_PORT_BASE + target))); pick a smaller index" >&2
       exit 2
     fi
     holder="$(awk -F'\t' -v i="$target" '$1==i{print $2; exit}' "$REGISTRY" 2>/dev/null || true)"
