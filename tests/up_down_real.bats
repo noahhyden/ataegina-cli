@@ -13,6 +13,7 @@ NODEMARK="ate_real_node_5f3a1"
 
 setup() {
   common_setup
+  integration_only
   command -v python3 >/dev/null 2>&1 || skip "python3 required"
   # A real port tool (helper defaults to none, which can't see real sockets).
   if command -v lsof >/dev/null 2>&1; then export ATE_PORT_TOOL=lsof

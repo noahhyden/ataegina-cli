@@ -16,6 +16,7 @@ db_exists() { myq "SELECT schema_name FROM information_schema.schemata WHERE sch
 my_ready() { docker exec "$MY_CONTAINER" mysql -uroot -p"$MY_PW" -N -B -e "SELECT 1" >/dev/null 2>&1; }
 
 setup_file() {
+  [ "${ATE_TEST_DOCKER:-0}" = "1" ] || return 0
   command -v docker >/dev/null 2>&1 || return 0
   docker info >/dev/null 2>&1 || return 0
   docker rm -f "$MY_CONTAINER" >/dev/null 2>&1 || true
@@ -28,6 +29,7 @@ teardown_file() { docker rm -f "$MY_CONTAINER" >/dev/null 2>&1 || true; }
 
 setup() {
   common_setup
+  docker_only
   my_ready || skip "docker/mysql not available"
   myq "DROP DATABASE IF EXISTS shopdb; DROP DATABASE IF EXISTS shopdb_wt1; CREATE DATABASE shopdb" >/dev/null 2>&1 || true
 }

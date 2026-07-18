@@ -14,7 +14,7 @@ load helper
 # outcome. Must not collide with anything else on the box.
 SENTINEL="ate_orphan_sentinel_918273645"
 
-setup()    { common_setup; }
+setup()    { common_setup; integration_only; }
 teardown() {
   pkill -f "$SENTINEL" 2>/dev/null || true
   common_teardown

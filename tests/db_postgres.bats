@@ -11,6 +11,7 @@ PG_CONTAINER="ate_bats_pg"
 
 # Start ONE throwaway postgres for the whole file; remove it after.
 setup_file() {
+  [ "${ATE_TEST_DOCKER:-0}" = "1" ] || return 0
   command -v docker >/dev/null 2>&1 || return 0
   docker info >/dev/null 2>&1 || return 0
   docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
@@ -30,6 +31,7 @@ teardown_file() {
 
 setup() {
   common_setup
+  docker_only
   docker exec "$PG_CONTAINER" pg_isready -U ateuser >/dev/null 2>&1 \
     || skip "docker/postgres not available"
   # Fresh base state for each test.

@@ -9,7 +9,7 @@ load helper
 
 MARK="ate_reuse_marker_44f1"
 
-setup()    { common_setup; }
+setup()    { common_setup; integration_only; }
 teardown() {
   pkill -f "$MARK" 2>/dev/null || true
   common_teardown

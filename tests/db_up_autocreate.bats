@@ -10,6 +10,7 @@ load helper
 PG_CONTAINER="ate_bats_pg_up"
 
 setup_file() {
+  [ "${ATE_TEST_DOCKER:-0}" = "1" ] || return 0
   command -v docker >/dev/null 2>&1 || return 0
   docker info >/dev/null 2>&1 || return 0
   docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
@@ -28,6 +29,7 @@ pgq() { docker exec "$PG_CONTAINER" psql -U ateuser -tAqc "$1" 2>/dev/null; }
 
 setup() {
   common_setup
+  docker_only
   pg_ready || skip "docker/postgres not available"
   if command -v lsof >/dev/null 2>&1; then export ATE_PORT_TOOL=lsof
   elif command -v ss >/dev/null 2>&1; then export ATE_PORT_TOOL=ss

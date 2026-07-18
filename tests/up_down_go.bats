@@ -10,6 +10,7 @@ MOD="ate_go_e2e_mod"
 
 setup() {
   common_setup
+  integration_only
   command -v go >/dev/null 2>&1 || skip "go required"
   if command -v lsof >/dev/null 2>&1; then export ATE_PORT_TOOL=lsof
   elif command -v ss >/dev/null 2>&1; then export ATE_PORT_TOOL=ss

@@ -11,6 +11,7 @@ SRV="flagship_srv.py"   # unique name so teardown can reap precisely
 
 setup() {
   common_setup
+  integration_only
   command -v python3 >/dev/null 2>&1 || skip "python3 required"
   command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 required"
   if command -v lsof >/dev/null 2>&1; then export ATE_PORT_TOOL=lsof

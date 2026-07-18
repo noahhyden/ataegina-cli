@@ -6,7 +6,7 @@ load helper
 
 LOGMARK="ate_logs_marker_71b3"
 
-setup()    { common_setup; }
+setup()    { common_setup; integration_only; }
 teardown() {
   pkill -f "$LOGMARK" 2>/dev/null || true
   common_teardown

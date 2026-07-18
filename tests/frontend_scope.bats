@@ -11,6 +11,7 @@ BESRV="be_scope_srv.py"
 
 setup() {
   common_setup
+  integration_only
   command -v python3 >/dev/null 2>&1 || skip "python3 required"
   if command -v lsof >/dev/null 2>&1; then export ATE_PORT_TOOL=lsof
   elif command -v ss >/dev/null 2>&1; then export ATE_PORT_TOOL=ss

@@ -10,7 +10,7 @@ load helper
 
 SLOWMARK="ate_diag_slow_marker"
 
-setup()    { common_setup; }
+setup()    { common_setup; integration_only; }
 teardown() {
   pkill -f "$SLOWMARK" 2>/dev/null || true
   common_teardown

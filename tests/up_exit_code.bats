@@ -8,7 +8,7 @@
 
 load helper
 
-setup()    { common_setup; }
+setup()    { common_setup; integration_only; }
 teardown() {
   pkill -f 'sleep 424242' 2>/dev/null || true
   common_teardown
