@@ -75,24 +75,30 @@ injection guard). Converted all to gating helpers (`refute` / `refute_output_has
 reappears. (All converted assertions still passed — the expectations were holding, just
 unenforced.)
 
-## Open dev-possibilities (characterized, not "bugs")
+## Fixed bugs (continued)
 
-These are defensible current behaviors, documented so a future change is a deliberate
-choice rather than a surprise. Deliberately NOT locked into assertions.
+### 4. `up` could not distinguish its own server from a foreign holder
+When any process already held the derived slot port, `ate up` printed "backend already
+up on :PORT" and "ready" — even if ataegina never launched it. It only checked whether
+the port was *listening*, not whether the listener was its own. Fixed by
+`_ate_port_ownership label port` (prints `ours` / `foreign` / `unknown`): it maps the
+port to pid(s) and checks whether any sits inside the process tree of our
+start-time-VERIFIED recorded launch. `up` now says "held by a process ataegina did not
+start — not launching" for a `foreign` holder (and readiness stays silent instead of
+declaring the foreign server "ready"). Crucially, a holder we *might* own but cannot
+prove (unmappable pids, or a daemonize-style start whose recorded wrapper exited and
+left the real server reparented to init) is `unknown`, never `foreign` — so we never
+accuse our own reparented server. Regression: `tests/fake_tool.bats` "up REFUSES to
+claim a foreign-held slot as its own" (and #12 daemonize still passes, proving the
+conservatism holds).
 
-### A. `up` cannot distinguish its own server from a foreign holder
-When any process already holds the derived slot port, `ate up` prints
-"backend already up on :PORT" and "ready" — even if ataegina never launched it. It
-only checks whether the port is listening, not whether the listener is its own. Idea:
-cross-check the recorded pidfile and warn ("port held by a process ataegina did not
-start") instead of implying success. Covered defensively by "up launches no duplicate
-when the slot port is already held".
-
-### B. `ate down` kills a foreign process on the slot
-`_ate_stop_port` reaps whatever holds the derived port, including a process ataegina
-never launched. Note the asymmetry: `down` carefully avoids killing a *recycled
-recorded pid* (the start-time guard) yet freely kills an unrelated port holder. The
-design premise is "the slot belongs to this worktree," so clearing it is somewhat
-intentional — but killing an unrelated process is surprising collateral. Idea: restrict
-killing to the recorded process tree, or at least warn when the port holder isn't in
-ataegina's records.
+### 5. `ate down` killed a foreign process on the slot
+`_ate_stop_port` reaped whatever held the derived port, including a process ataegina
+never launched — the asymmetric counterpart to bug 4 (`down` already avoided killing a
+*recycled recorded pid* via the start-time guard, yet freely killed an unrelated port
+holder). Fixed with the same `_ate_port_ownership` check: `down` now leaves a
+positively-`foreign` holder alone and says so, while `down --force` (or
+`ATE_DOWN_FORCE=1`) still clears the slot on demand. Ambiguous (`unknown`) cases fall
+through to the normal teardown, so a reparented daemon of ours is still reaped.
+Regression: `tests/fake_tool.bats` "down LEAVES a foreign slot holder alone, but
+--force reaps it".

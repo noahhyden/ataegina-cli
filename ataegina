@@ -46,7 +46,8 @@ ataegina - worktree-aware dev launcher (zero dependencies, pure bash)
 usage:
   ataegina init [options]               detect your stack, write ataegina.config.sh
   ataegina up [both|backend|frontend] [--scope X]   start dev servers (default: both)
-  ataegina down [both|backend|frontend] stop dev servers
+  ataegina down [both|backend|frontend] [--force]   stop dev servers (--force also
+                                        reaps a slot held by a process ataegina did not start)
   ataegina logs [both|backend|frontend] [-n N] [--no-follow]   follow this tree's logs
   ataegina db [name|url|create|drop]    inspect/manage this tree's database
   ataegina ports                        show this tree's index, ports, urls
@@ -617,10 +618,63 @@ _ate_launch_in_progress() {
   return 1
 }
 
+# _ate_port_ownership LABEL PORT -> prints exactly one of: ours | foreign | unknown
+#
+# Answers "did ataegina start the process currently holding PORT for LABEL?" — the
+# missing piece behind two long-standing rough edges: `up` implying success for a
+# port it never launched, and `down` killing an unrelated squatter on the slot.
+#
+#   ours     A port holder is inside the process tree of our recorded launch pid,
+#            and that pid is start-time-VERIFIED as ours (the same positive-proof
+#            guard `down` and _ate_launch_in_progress use). Definitely ours.
+#   foreign  We can map the port to live pid(s), NONE are in a verified tree of
+#            ours, AND we hold no launch record for this label at all. Definitely
+#            not ours.
+#   unknown  Either we cannot map the port to pids (proc/none backends), OR we DO
+#            have a launch record we simply cannot tie to the holder — e.g. a
+#            daemonize-style start whose recorded wrapper pid has already exited
+#            and left the real server reparented to init. Stay conservative here:
+#            never accuse our own (possibly reparented) server of being foreign.
+_ate_port_ownership() {
+  local label="$1" port="$2" holders h
+  holders="$(ate_port_pids "$port" | tr '\n' ' ')"
+  [ -n "${holders// /}" ] || { echo unknown; return 0; }
+  local pidfile="${DEV_LOG_DIR:-}/$label.pid" startfile="${DEV_LOG_DIR:-}/$label.pidstart"
+  local have_record=0 lpid want got ourtree=""
+  if [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ]; then
+    have_record=1
+    lpid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
+      want="$(cat "$startfile" 2>/dev/null || true)"
+      got="$(ate_pid_starttime "$lpid")"
+      if [ -n "$want" ] && [ -n "$got" ] && [ "$want" = "$got" ]; then
+        ourtree=" $(ate_pid_tree "$lpid" | tr '\n' ' ') "
+      fi
+    fi
+  fi
+  if [ -n "${ourtree// /}" ]; then
+    for h in $holders; do
+      case "$ourtree" in *" $h "*) echo ours; return 0 ;; esac
+    done
+  fi
+  # Holders are mappable but not tied to a verified launch of ours. If we launched
+  # *something* for this label (a record exists), be conservative — it may be our
+  # own reparented daemon; call it unknown, not foreign.
+  [ "$have_record" = 1 ] && { echo unknown; return 0; }
+  echo foreign
+}
+
 ate_start_backend() {
   [ -n "${BACKEND_CMD:-}" ] || { echo "ataegina: no backend configured (run: ataegina init)" >&2; return 1; }
   cd "$REPO_ROOT/${BACKEND_DIR:-.}" || return 1
-  if ate_port_listening "$BACKEND_PORT"; then echo "backend  already up on :$BACKEND_PORT"; return 0; fi
+  if ate_port_listening "$BACKEND_PORT"; then
+    if [ "$(_ate_port_ownership backend "$BACKEND_PORT")" = foreign ]; then
+      echo "backend  :$BACKEND_PORT is held by a process ataegina did not start ($(ate_port_proc_desc "$BACKEND_PORT")) — not launching (free it, or 'ataegina move N' to a clear slot)" >&2
+    else
+      echo "backend  already up on :$BACKEND_PORT"
+    fi
+    return 0
+  fi
   if _ate_launch_in_progress backend; then echo "backend  already starting on :$BACKEND_PORT (pid $(cat "$DEV_LOG_DIR/backend.pid" 2>/dev/null))"; return 0; fi
   ( export PORT="$BACKEND_PORT" BACKEND_PORT FRONTEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
     # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
@@ -640,7 +694,14 @@ ate_start_backend() {
 ate_start_frontend() {
   [ -n "${FRONTEND_CMD:-}" ] || { echo "ataegina: no frontend configured (run: ataegina init)" >&2; return 1; }
   cd "$REPO_ROOT/${FRONTEND_DIR:-.}" || return 1
-  if ate_port_listening "$FRONTEND_PORT"; then echo "frontend already up on :$FRONTEND_PORT"; return 0; fi
+  if ate_port_listening "$FRONTEND_PORT"; then
+    if [ "$(_ate_port_ownership frontend "$FRONTEND_PORT")" = foreign ]; then
+      echo "frontend :$FRONTEND_PORT is held by a process ataegina did not start ($(ate_port_proc_desc "$FRONTEND_PORT")) — not launching (free it, or 'ataegina move N' to a clear slot)" >&2
+    else
+      echo "frontend already up on :$FRONTEND_PORT"
+    fi
+    return 0
+  fi
   if _ate_launch_in_progress frontend; then echo "frontend already starting on :$FRONTEND_PORT (pid $(cat "$DEV_LOG_DIR/frontend.pid" 2>/dev/null))"; return 0; fi
   ( export PORT="$FRONTEND_PORT" FRONTEND_PORT BACKEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
     # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
@@ -706,6 +767,16 @@ ate_pid_tree() {
 # SIGTERM the set, brief grace, then SIGKILL any survivor.
 _ate_stop_port() {
   local label="$1" port="$2" stopped=0 roots="" pid targets
+  # Do not reap a process we can POSITIVELY identify as foreign — one holding the
+  # slot that ataegina never launched and has no record of. `down` already refuses
+  # to kill a recycled recorded pid (the start-time guard below); this closes the
+  # matching gap of freely killing an unrelated squatter on the derived port.
+  # Ambiguous cases (unmappable pids, or our own possibly-reparented daemon) fall
+  # through to the normal teardown. ATE_DOWN_FORCE=1 (or `down --force`) overrides.
+  if [ "${ATE_DOWN_FORCE:-0}" != 1 ] && [ "$(_ate_port_ownership "$label" "$port")" = foreign ]; then
+    echo "$label: :$port is held by a process ataegina did not start ($(ate_port_proc_desc "$port")) — leaving it alone (use 'ataegina down $label --force' to kill it)" >&2
+    return 0
+  fi
   roots="$(ate_port_pids "$port" | tr '\n' ' ')"
   local pidfile="${DEV_LOG_DIR:-}/$label.pid" startfile="${DEV_LOG_DIR:-}/$label.pidstart" lpid
   if [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ]; then
@@ -766,6 +837,13 @@ ate_stop_frontend() { _ate_stop_port "frontend" "$FRONTEND_PORT"; }
 # first runs (dependency sync, initial compile); we point at the log instead.
 ate_report_ready() {
   local label="$1" port="$2" url="$3" i=0
+  # If the slot is already held by a process we can positively identify as foreign,
+  # the start hook has already reported "not launching" — do NOT then poll that
+  # foreign server and cheerfully declare it "ready" (which implied ataegina had
+  # brought it up). Say nothing further here.
+  if ate_port_listening "$port" && [ "$(_ate_port_ownership "$label" "$port")" = foreign ]; then
+    return 0
+  fi
   # The pid we recorded at launch, so we can tell a SLOW start from a DEAD one.
   local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid=""
   [ -f "$pidfile" ] && lpid="$(cat "$pidfile" 2>/dev/null || true)"
@@ -1132,6 +1210,11 @@ detect_frontend() {
     pkg="$TREE/$d/package.json"
     [ -f "$pkg" ] || continue
     if pkg_has_dep "$pkg" next; then FE_DIR="$d"; FE_KIND="next"; break; fi
+    if pkg_has_dep "$pkg" nuxt; then FE_DIR="$d"; FE_KIND="nuxt"; break; fi
+    if pkg_has_dep "$pkg" astro; then FE_DIR="$d"; FE_KIND="astro"; break; fi
+    # SvelteKit/Astro/Nuxt all sit ON TOP of vite, so they must be checked BEFORE
+    # the bare-vite fallback below or they'd be misdetected as generic vite.
+    if pkg_has_dep "$pkg" @sveltejs/kit; then FE_DIR="$d"; FE_KIND="svelte"; break; fi
     if pkg_has_dep "$pkg" react-scripts; then FE_DIR="$d"; FE_KIND="cra"; break; fi
     if pkg_has_dep "$pkg" vite; then FE_DIR="$d"; FE_KIND="vite"; break; fi
     # package.json with no known framework: remember it as a fallback location.
@@ -1152,6 +1235,23 @@ detect_frontend() {
         FE_NOTE="next"
       fi
       FE_ENV='NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL'
+      ;;
+    nuxt)
+      FE_CMD='npx nuxt dev --port $FRONTEND_PORT'
+      FE_ENV='NUXT_PUBLIC_API_BASE_URL=$BACKEND_URL'
+      FE_NOTE="nuxt"
+      ;;
+    astro)
+      FE_CMD='npx astro dev --port $FRONTEND_PORT'
+      FE_ENV='PUBLIC_API_BASE_URL=$BACKEND_URL'
+      FE_NOTE="astro"
+      ;;
+    svelte)
+      # SvelteKit's dev server IS vite; exposing vars to the client needs the
+      # PUBLIC_ prefix ($env/static/public).
+      FE_CMD='npx vite dev --port $FRONTEND_PORT'
+      FE_ENV='PUBLIC_API_BASE_URL=$BACKEND_URL'
+      FE_NOTE="sveltekit (vite dev)"
       ;;
     vite)
       FE_CMD='npx vite --port $FRONTEND_PORT'
@@ -1190,6 +1290,8 @@ detect_backend() {
     if [ -f "$base/package.json" ] && { pkg_has_dep "$base/package.json" express || pkg_has_dep "$base/package.json" @nestjs/core; }; then
       BE_DIR="$d"; BE_KIND="node"; break; fi
     if [ -f "$base/go.mod" ]; then BE_DIR="$d"; BE_KIND="go"; break; fi
+    if [ -f "$base/Cargo.toml" ]; then BE_DIR="$d"; BE_KIND="rust"; break; fi
+    if [ -f "$base/artisan" ]; then BE_DIR="$d"; BE_KIND="php"; break; fi
   done
   [ -n "$BE_DIR" ] || return 0
   base="$TREE/$BE_DIR"
@@ -1216,8 +1318,25 @@ detect_backend() {
       BE_NOTE="node (express/nest; PORT env carries the slot)"
       ;;
     go)
-      BE_CMD=""
-      BE_NOTE="go (no reliable default; TODO: fill BACKEND_CMD)"
+      # No universal go dev-server convention, but `go run .` runs the main
+      # package in the module dir — a sane default for the common single-main
+      # layout. Most go web apps read the port from $PORT; we export it. Adjust
+      # BACKEND_CMD (e.g. `go run ./cmd/server`) if your main lives elsewhere.
+      BE_CMD='go run .'
+      BE_ENV='PORT=$BACKEND_PORT'
+      BE_NOTE="go (go run .; PORT env carries the slot — edit if main is under ./cmd/...)"
+      ;;
+    rust)
+      # `cargo run` builds and runs the crate's default binary. Most frameworks
+      # (axum/actix/rocket) read the bind port from $PORT; we export it.
+      BE_CMD='cargo run'
+      BE_ENV='PORT=$BACKEND_PORT'
+      BE_NOTE="rust (cargo run; PORT env carries the slot)"
+      ;;
+    php)
+      # Laravel's artisan serve binds the given port directly.
+      BE_CMD='php artisan serve --host=0.0.0.0 --port=$BACKEND_PORT'
+      BE_NOTE="php (laravel artisan serve)"
       ;;
     *)
       BE_CMD=""
@@ -2120,11 +2239,22 @@ case "$CMD" in
     ate_version_check_notice || true
     ;;
   down)
-    case "$MODE" in
+    # Parse an optional mode word and a --force flag in any order (so both
+    # `down backend --force` and `down --force backend` work). --force lets down
+    # reap a slot held by a process ataegina did not start (see _ate_stop_port).
+    shift
+    down_mode=both
+    for _arg in "$@"; do
+      case "$_arg" in
+        --force|-f)            export ATE_DOWN_FORCE=1 ;;
+        both|backend|frontend) down_mode="$_arg" ;;
+        *) echo "ataegina: unknown argument '$_arg' to down (both|backend|frontend [--force])" >&2; exit 2 ;;
+      esac
+    done
+    case "$down_mode" in
       both)     ate_stop_frontend; ate_stop_backend ;;
       backend)  ate_stop_backend ;;
       frontend) ate_stop_frontend ;;
-      *) echo "ataegina: unknown mode '$MODE' (both|backend|frontend)" >&2; exit 2 ;;
     esac
     ;;
   logs)
