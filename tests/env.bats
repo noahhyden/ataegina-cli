@@ -109,14 +109,21 @@ teardown() { common_teardown; }
 }
 
 @test "env single-quotes values so a repo path with spaces round-trips" {
-  spaced="$ATE_TMP/my repo dir"
-  local repo; repo="$(make_repo "$spaced")"
+  local repo; repo="$(make_repo "$ATE_TMP/my repo dir")"
   cd "$repo"
   run ate env
   [ "$status" -eq 0 ]
+  # Eval must succeed despite the space (single-quoting), and the spaced path must
+  # survive intact. Assert on the suffix, not full equality: on macOS the temp dir
+  # resolves through a /var -> /private/var symlink, so `git rev-parse` (REPO_ROOT)
+  # differs from the mktemp path — the same reason spaces_in_path.bats substring-matches.
   REPO_ROOT=""
   eval "$output"
-  [ "$REPO_ROOT" = "$spaced" ]
+  [ -n "$REPO_ROOT" ]
+  case "$REPO_ROOT" in
+    *"my repo dir") : ;;
+    *) printf 'REPO_ROOT did not end with the spaced dir: %s\n' "$REPO_ROOT"; return 1 ;;
+  esac
 }
 
 @test "env's ports agree with what 'ports' reports" {
