@@ -21,3 +21,6 @@ worktree-index
 *.swp
 .idea/
 .vscode/
+
+# bashcov / SimpleCov coverage output (local only)
+coverage/
