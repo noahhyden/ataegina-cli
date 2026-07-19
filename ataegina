@@ -1522,6 +1522,23 @@ config_target_path() {
 # Single-quote VALUE for writing into the config, keeping it literal so a
 # deferred-expansion value like `npx next dev -p $FRONTEND_PORT` round-trips
 # unchanged. Embedded single quotes are escaped the standard shell way: '\''.
+# JSON-escape a string and wrap it in double quotes, so the result is a complete
+# JSON string literal. Escapes backslash first (so we don't double-escape the ones
+# we add next), then the double quote, then the control chars JSON forbids bare
+# (tab/newline/CR — the ones that actually turn up in log paths and DB URLs).
+# bash-3.2-safe global substitution (same ${v//pat/repl} form as config_quote), no
+# external JSON tool — consistent with the rest of the script (see docs/design/
+# agent-native.md for the shared shape these emitters build).
+json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  printf '"%s"' "$s"
+}
+
 config_quote() {
   local v="$1" out esc
   # Replace every ' with the standard '\'' sequence (close-quote, escaped quote,
@@ -2134,6 +2151,28 @@ cmd_env() {
   fi
 }
 
+# Emit THIS worktree's derived slot as a single-line JSON object — the shared shape
+# `ports --json`, `status --json`, `up --json`, and `list --json` all build on (see
+# docs/design/agent-native.md). Pure data: derived from the registry + config,
+# starts nothing, touches no network. `db` is null when no database is configured;
+# `db.url` is null when DB_NAME is set but DB_URL_TEMPLATE is not. Reads the same
+# globals `up` exports (N, TREE, FE_PORT, BE_PORT, LOG_DIR, ATE_DB_NAME, _ate_db_url).
+emit_slot_json() {
+  local db_json='null' url_json='null'
+  if [ -n "${ATE_DB_NAME:-}" ]; then
+    [ -n "${_ate_db_url:-}" ] && url_json="$(json_str "$_ate_db_url")"
+    db_json="$(printf '{"name":%s,"url":%s}' "$(json_str "$ATE_DB_NAME")" "$url_json")"
+  fi
+  # index and ports are integers we control, so they are emitted bare (unquoted).
+  printf '{"index":%s,"repo_root":%s,"frontend":{"port":%s,"url":%s},"backend":{"port":%s,"url":%s},"log_dir":%s,"db":%s}' \
+    "$N" \
+    "$(json_str "$TREE")" \
+    "$FE_PORT" "$(json_str "http://localhost:$FE_PORT")" \
+    "$BE_PORT" "$(json_str "http://localhost:$BE_PORT")" \
+    "$(json_str "$LOG_DIR")" \
+    "$db_json"
+}
+
 # Print a shell completion script to stdout. Needs no worktree/config, so it runs
 # before the git-worktree requirement — you source it from an rc file anywhere.
 # The subcommand list mirrors the dispatch; keep it in sync when adding commands.
@@ -2157,6 +2196,7 @@ _ataegina() {
     db)      COMPREPLY=( \$(compgen -W "name url create drop" -- "\$cur") ) ;;
     config)  COMPREPLY=( \$(compgen -W "list get set unset path --global" -- "\$cur") ) ;;
     env)     COMPREPLY=( \$(compgen -W "--no-export" -- "\$cur") ) ;;
+    ports)   COMPREPLY=( \$(compgen -W "--json" -- "\$cur") ) ;;
     *)       COMPREPLY=() ;;
   esac
 }
@@ -2179,6 +2219,7 @@ _ataegina() {
     db)      compadd -- name url create drop ;;
     config)  compadd -- list get set unset path --global ;;
     env)     compadd -- --no-export ;;
+    ports)   compadd -- --json ;;
   esac
 }
 _ataegina "\$@"
@@ -2390,10 +2431,24 @@ case "$CMD" in
     cmd_db "$@"
     ;;
   ports)
-    log "worktree #$N  $TREE"
-    echo "  frontend: http://localhost:$FE_PORT"
-    echo "  backend:  http://localhost:$BE_PORT"
-    echo "  logs:     $LOG_DIR"
+    shift
+    ports_json=0
+    for _arg in "$@"; do
+      case "$_arg" in
+        --json) ports_json=1 ;;
+        *) echo "ataegina ports: unknown argument '$_arg' (--json)" >&2; exit 2 ;;
+      esac
+    done
+    if [ "$ports_json" = 1 ]; then
+      # Pure JSON on stdout (one line, greppable/pipe-friendly): the shared slot
+      # object, nothing else. An agent parses this instead of the human table.
+      emit_slot_json; printf '\n'
+    else
+      log "worktree #$N  $TREE"
+      echo "  frontend: http://localhost:$FE_PORT"
+      echo "  backend:  http://localhost:$BE_PORT"
+      echo "  logs:     $LOG_DIR"
+    fi
     ;;
   env)
     shift
