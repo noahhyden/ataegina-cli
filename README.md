@@ -142,8 +142,9 @@ ataegina up
 ataegina ports     # show this tree's index + urls
 ```
 
-`ataegina init` probes for your frontend and backend (Next, Vite, CRA on the
-frontend; uv/poetry, Django, Rails, Express/Nest on the backend), derives a
+`ataegina init` probes for your frontend and backend (Next, Nuxt, Astro,
+SvelteKit, Vite, CRA on the frontend; uv/poetry, Django, Rails, Express/Nest,
+Go, Rust/Cargo, PHP/Laravel on the backend), derives a
 per-slot start command for each (overriding any port pinned in a `dev` script),
 and writes a declarative `ataegina.config.sh`. It is interactive by default
 (each detected value is offered as the prompt default, empty input accepts it);
