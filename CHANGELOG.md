@@ -13,6 +13,13 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina exec [--] CMD [args...]`.** Runs `CMD` with this worktree's derived
+  environment injected — the same variables `up` gives your servers and `env`
+  prints — inheriting stdio and the current directory, exiting with `CMD`'s
+  status. The one-shot complement to `eval "$(ataegina env)"` (e.g.
+  `ataegina exec -- pytest`, `ataegina exec -- psql "$DATABASE_URL"`) that leaves
+  your own shell untouched. An optional `--` guards a dash-named command; no
+  command is an error.
 - **`ataegina env`.** Prints this worktree's derived environment — the same
   variables `up` injects into your dev servers (`ATE_INDEX`, `FRONTEND_PORT` /
   `BACKEND_PORT`, the URLs, `DEV_LOG_DIR`, and, when a database is configured,

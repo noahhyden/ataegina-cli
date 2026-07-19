@@ -207,6 +207,7 @@ always).
 | `ataegina db [name\|url\|create\|drop]` | Inspect/manage this tree's database (when `DB_NAME` is set) |
 | `ataegina ports` | Print this tree's index, ports, and urls |
 | `ataegina env [--no-export]` | Print this tree's derived environment (index, ports, URLs, log dir, and the per-worktree DB name + URL when configured) as eval-able shell — the same variables `up` injects into your servers. `eval "$(ataegina env)"` reproduces it in your own shell; `--no-export` drops the `export ` prefix for `> .env` |
+| `ataegina exec [--] CMD [args...]` | Run `CMD` with this tree's derived environment injected (same vars as `env`), inheriting stdio and the current directory, exiting with `CMD`'s status. The one-shot form of `eval "$(ataegina env)"` — e.g. `ataegina exec -- pytest` or `ataegina exec -- psql "$DATABASE_URL"` |
 | `ataegina move N` | Relocate this worktree to index `N` (and its derived port slot); stops the old slot's servers, refuses an index another live worktree holds, and rejects index 0 |
 | `ataegina list` | List every registered worktree (flags stale entries) |
 | `ataegina prune` | Drop registry entries whose worktree directory is gone |
@@ -287,6 +288,14 @@ starting anything:
 eval "$(ataegina env)"          # this tree's ports/URLs/DB now in your shell
 curl "$BACKEND_URL/health"      # e.g. hit the derived backend port
 ataegina env --no-export > .env # or write a sourceable .env (no `export ` prefix)
+```
+
+For a **one-off** command you don't want polluting your shell, `ataegina exec`
+runs it with the same environment injected (and exits with its status):
+
+```sh
+ataegina exec -- pytest                 # tests against this tree's derived ports/DB
+ataegina exec -- psql "$DATABASE_URL"    # open the per-worktree database
 ```
 
 **Declarative config (the common case).** Set `FRONTEND_DIR` / `FRONTEND_CMD`
