@@ -89,14 +89,18 @@ assert_valid_json() {
 
 @test "ports --json repo_root is the worktree path, JSON-escaped" {
   # A path with a space is a legal JSON string (no escaping needed) but must
-  # round-trip intact; proves repo_root is emitted through the escaper.
+  # round-trip intact; proves repo_root is emitted through the escaper. Compare
+  # against the git-resolved toplevel (what ataegina uses for TREE), not the raw
+  # mktemp path: on macOS $TMPDIR is a symlink (/var -> /private/var) that git
+  # resolves, so the raw path would never match.
   spaced="$ATE_TMP/repo dir"
   R="$(make_repo "$spaced")"
+  EXP="$(cd "$R" && git rev-parse --show-toplevel)"
   cd "$R"
   run ate ports --json
   [ "$status" -eq 0 ]
   assert_valid_json "$output"
-  echo "$output" | grep -qF "\"repo_root\":\"$R\""
+  echo "$output" | grep -qF "\"repo_root\":\"$EXP\""
 }
 
 @test "ports --json escapes quotes and backslashes in repo_root (stays valid JSON)" {
@@ -105,14 +109,16 @@ assert_valid_json() {
   # its backslash-first ordering). Linux permits both chars in a directory name.
   tricky="$ATE_TMP/re\\po\"x"
   R="$(make_repo "$tricky")"
+  EXP="$(cd "$R" && git rev-parse --show-toplevel)"
   cd "$R"
   run ate ports --json
   [ "$status" -eq 0 ]
   assert_valid_json "$output"
-  # If python3 is present, confirm the decoded repo_root equals the real path.
+  # If python3 is present, confirm the decoded repo_root equals the real path
+  # (git-resolved, so it matches on macOS's symlinked $TMPDIR too).
   if command -v python3 >/dev/null 2>&1; then
     got="$(printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["repo_root"])')"
-    [ "$got" = "$R" ]
+    [ "$got" = "$EXP" ]
   fi
 }
 
