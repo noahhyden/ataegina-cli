@@ -52,19 +52,25 @@ launched is ready (or when nothing was launched, e.g. scope none).
 
 A new read-only command: "is this tree up, and where?" — the side-effect-free
 query agents need before acting. Human form prints a compact per-surface state;
-`--json` prints the slot object plus a `state` block:
+`--json` prints the slot object with `state` + `pid` folded into the
+frontend/backend sub-objects:
 
 ```json
-{ "...slot...": ...,
+{ "index": 1, "repo_root": "...",
   "frontend": { "port": 5174, "url": "...", "state": "running", "pid": 1234 },
   "backend":  { "port": 8001, "url": "...", "state": "stopped", "pid": null },
-  "db": { "name": "myapp_wt1", "url": "...", "exists": null } }
+  "log_dir": "...",
+  "db": { "name": "myapp_wt1", "url": "..." } }
 ```
 
 `state` is one of `running` (a live server we launched holds the port),
-`foreign` (something we did not launch holds it), `stopped` (nothing on the
-port). Reuses `_ate_port_ownership` + `ate_port_pids`. Never mutates; exit 0
-regardless of state (state is data, not failure).
+`foreign` (something we did not launch holds it), `unknown` (the port is held
+but ownership can't be verified — often our own reparented daemon), or `stopped`
+(nothing on the port). `pid` is the holder's pid (integer) or `null` when
+nothing holds the port or the port backend can't map pids. `db` is the same
+non-probed object as the slot shape (status never connects to the database).
+Reuses `_ate_port_ownership` + `ate_port_pids`. Never mutates; exit 0 regardless
+of state (state is data, not failure).
 
 ## 4. `up --json`
 

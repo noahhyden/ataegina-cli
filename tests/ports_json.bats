@@ -140,8 +140,8 @@ assert_valid_json() {
 @test "completion advertises ports --json (bash + zsh)" {
   run ate completion bash
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'ports)   COMPREPLY=.*--json'
+  echo "$output" | grep -q 'ports|status) COMPREPLY=.*--json'
   run ate completion zsh
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'ports)   compadd -- --json'
+  echo "$output" | grep -q 'ports|status) compadd -- --json'
 }

@@ -136,6 +136,23 @@ print a single line of JSON instead (index, repo_root, frontend/backend port and
 url, log_dir, and the per-worktree database name and url when configured) for
 agents and scripts to parse; nothing else is written to stdout.
 .TP
+.B status \fR[--json]
+Read-only liveness for this worktree: the side-effect-free "is my stack up, and
+where?" query. Per surface reports
+.IR running " (a live server ataegina launched holds the port), " foreign
+(something ataegina did not launch holds it),
+.I unknown
+(held but ownership unverifiable), or
+.IR stopped .
+Starts and stops nothing, opens no database connection, and exits 0 regardless
+of state. With
+.B --json
+it folds
+.I state
+and
+.I pid
+into the frontend/backend sub-objects of the slot shape.
+.TP
 .B open \fR[frontend|backend]
 Open this worktree's derived URL in a browser (default
 .BR frontend ).
