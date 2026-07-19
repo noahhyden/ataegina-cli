@@ -11,6 +11,8 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-19
+
 ### Added
 
 - **Foreign port-holder awareness in `up` and `down`.** A new ownership check

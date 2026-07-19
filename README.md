@@ -201,8 +201,8 @@ always).
 | Command | What it does |
 |---|---|
 | `ataegina init [options]` | Detect your stack and write a declarative `ataegina.config.sh` (interactive by default; `--yes`, `--dry-run`, `--force`, `--frontend-dir`, `--backend-dir`) |
-| `ataegina up [both\|backend\|frontend] [--scope X]` | Start dev servers (default `both`) on this tree's port slot; `--scope frontend\|backend\|both\|none` forces the start scope (see "Scope-aware startup") |
-| `ataegina down [both\|backend\|frontend]` | Stop them (kills by port, and by the pid it launched so nothing orphans) |
+| `ataegina up [both\|backend\|frontend] [--scope X]` | Start dev servers (default `both`) on this tree's port slot; `--scope frontend\|backend\|both\|none` forces the start scope (see "Scope-aware startup"). If the slot is already held by a process ataegina didn't launch, it says so and declines rather than implying success |
+| `ataegina down [both\|backend\|frontend] [--force]` | Stop them (kills by port, and by the pid it launched so nothing orphans). Leaves a slot held by a process ataegina didn't start alone; `--force` (or `ATE_DOWN_FORCE=1`) reaps it anyway |
 | `ataegina logs [both\|backend\|frontend] [-n N] [--no-follow]` | Follow this tree's server logs live (scoped to the current worktree) |
 | `ataegina db [name\|url\|create\|drop]` | Inspect/manage this tree's database (when `DB_NAME` is set) |
 | `ataegina ports` | Print this tree's index, ports, and urls |
@@ -412,6 +412,17 @@ starts a backend regardless of what was detected.
 idempotent thanks to the `lsof` "already up" guard. There is no teardown:
 re-run `ataegina up` after a task's scope has grown and it starts only the
 newly-needed surface, leaving anything already running untouched.
+
+**It knows its own processes from strangers.** When a slot's port is already
+held, ataegina cross-checks the holder against the pid it recorded at launch
+(start-time verified, so a recycled pid can't fool it). A process it *did* start
+reads as "already up"; a process it *didn't* is named as foreign — `up` declines
+to launch on top of it (instead of implying success), and `down` leaves it alone
+rather than killing an unrelated squatter on the derived port. `down --force`
+(or `ATE_DOWN_FORCE=1`) overrides that when you really do want the slot cleared.
+Ambiguous cases — a port whose pids can't be mapped, or ataegina's own server
+that daemonized and reparented — are treated conservatively as "maybe ours" so
+nothing you launched is ever spared teardown or falsely accused.
 
 ### Diagnostics
 
