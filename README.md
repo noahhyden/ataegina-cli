@@ -207,6 +207,7 @@ always).
 | `ataegina logs [both\|backend\|frontend] [-n N] [--no-follow]` | Follow this tree's server logs live (scoped to the current worktree) |
 | `ataegina db [name\|url\|create\|drop]` | Inspect/manage this tree's database (when `DB_NAME` is set) |
 | `ataegina ports` | Print this tree's index, ports, and urls |
+| `ataegina open [frontend\|backend]` | Open this tree's URL in a browser (default `frontend`). Opener: `$BROWSER`, else `xdg-open` (Linux), else `open` (macOS); prints the URL if none is available |
 | `ataegina env [--no-export]` | Print this tree's derived environment (index, ports, URLs, log dir, and the per-worktree DB name + URL when configured) as eval-able shell — the same variables `up` injects into your servers. `eval "$(ataegina env)"` reproduces it in your own shell; `--no-export` drops the `export ` prefix for `> .env` |
 | `ataegina exec [--] CMD [args...]` | Run `CMD` with this tree's derived environment injected (same vars as `env`), inheriting stdio and the current directory, exiting with `CMD`'s status. The one-shot form of `eval "$(ataegina env)"` — e.g. `ataegina exec -- pytest` or `ataegina exec -- psql "$DATABASE_URL"` |
 | `ataegina move N` | Relocate this worktree to index `N` (and its derived port slot); stops the old slot's servers, refuses an index another live worktree holds, and rejects index 0 |

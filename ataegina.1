@@ -37,6 +37,10 @@ ataegina \- worktree-aware dev launcher: collision-free ports, processes, and da
 .RB [ name | url | create | drop ]
 .br
 .B ataegina
+.I open
+.RB [ frontend | backend ]
+.br
+.B ataegina
 .RB { ports | env | list | move
 .IR N | prune | doctor }
 .br
@@ -117,6 +121,17 @@ database name.
 .TP
 .B ports
 Show this worktree's index, derived ports, and URLs.
+.TP
+.B open \fR[frontend|backend]
+Open this worktree's derived URL in a browser (default
+.BR frontend ).
+The opener is
+.B $BROWSER
+if set (it may carry its own flags), else
+.B xdg-open
+on Linux, else
+.B open
+on macOS; if none is available the URL is printed so you can open it yourself.
 .TP
 .B env " [\-\-no\-export]"
 Print this worktree's derived environment (index, ports, URLs, log dir, and the
