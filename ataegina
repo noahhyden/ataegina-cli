@@ -53,6 +53,8 @@ usage:
   ataegina ports                        show this tree's index, ports, urls
   ataegina env [--no-export]            print this tree's derived env as eval-able
                                         shell (eval "$(ataegina env)")
+  ataegina exec [--] CMD [args...]      run CMD with this tree's derived env
+                                        injected (e.g. ataegina exec -- npm test)
   ataegina list                         show all registered worktrees
   ataegina move N                       relocate this worktree to index N (new ports)
   ataegina prune                        drop registry entries whose tree is gone
@@ -2310,6 +2312,24 @@ case "$CMD" in
     shift
     cmd_env "$@"
     ;;
+  exec)
+    shift
+    # Optional `--` separates ataegina's args from the command, so a command that
+    # starts with a dash (e.g. `ataegina exec -- -flagged-tool`) is not mistaken
+    # for an ataegina option.
+    [ "${1:-}" = "--" ] && shift
+    if [ "$#" -eq 0 ]; then
+      echo "ataegina exec: needs a command, e.g. ataegina exec -- npm test" >&2
+      exit 2
+    fi
+    # The per-tree environment (ATE_INDEX, the *_PORT / *_URL vars, DEV_LOG_DIR,
+    # and ATE_DB_NAME + the DB URL when configured) is already exported above, so
+    # the command inherits it. `exec` replaces this process, so the command's exit
+    # status becomes ours and it owns the terminal directly (signals, stdio). The
+    # `--` guards a command whose name starts with a dash: without it exec would
+    # parse e.g. `-mytool` as its own option and fail with "invalid option".
+    exec -- "$@"
+    ;;
   list)
     printf '0\t%s (primary)\n' "$PRIMARY"
     if [ -f "$REGISTRY" ]; then
@@ -2409,7 +2429,7 @@ case "$CMD" in
     exit "$rc"
     ;;
   *)
-    echo "usage: ataegina [init|up|down|logs|db|ports|env|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
+    echo "usage: ataegina [init|up|down|logs|db|ports|env|exec|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
     echo "       ataegina --help    for full usage" >&2
     exit 2
     ;;
