@@ -35,6 +35,12 @@ ataegina \- worktree-aware dev launcher: collision-free ports, processes, and da
 .IR N | prune | doctor }
 .br
 .B ataegina
+.I exec
+.RB [ \-\- ]
+.I CMD
+.RI [ args .\|.\|.]
+.br
+.B ataegina
 .I config
 .RB [ list | get | set | unset | path ]
 .br
@@ -105,6 +111,21 @@ omits the
 prefix so the output can be redirected to a
 .I .env
 file. Read\-only.
+.TP
+.BR exec " [\-\-] " \fICMD " [" \fIargs .\|.\|.]
+Run
+.I CMD
+with this worktree's derived environment injected (the same variables
+.B env
+prints), inheriting stdio and the current directory, and exit with
+.IR CMD 's
+status. The one\-shot form of
+.BR "eval \(dq$(ataegina env)\(dq" ,
+e.g.
+.BR "ataegina exec \-\- pytest" .
+An optional
+.B \-\-
+separates ataegina's arguments from the command.
 .TP
 .B list
 Show all registered worktrees and their indices.
