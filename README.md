@@ -203,6 +203,7 @@ always).
 | `ataegina init [options]` | Detect your stack and write a declarative `ataegina.config.sh` (interactive by default; `--yes`, `--dry-run`, `--force`, `--frontend-dir`, `--backend-dir`) |
 | `ataegina up [both\|backend\|frontend] [--scope X]` | Start dev servers (default `both`) on this tree's port slot; `--scope frontend\|backend\|both\|none` forces the start scope (see "Scope-aware startup"). If the slot is already held by a process ataegina didn't launch, it says so and declines rather than implying success |
 | `ataegina down [both\|backend\|frontend] [--force]` | Stop them (kills by port, and by the pid it launched so nothing orphans). Leaves a slot held by a process ataegina didn't start alone; `--force` (or `ATE_DOWN_FORCE=1`) reaps it anyway |
+| `ataegina restart [both\|backend\|frontend] [--scope X]` | Bounce this tree's servers: a `down` then an `up`. Args forward to `up` (which resolves the scope); the stop phase mirrors the mode word, so `restart backend` bounces only the backend |
 | `ataegina logs [both\|backend\|frontend] [-n N] [--no-follow]` | Follow this tree's server logs live (scoped to the current worktree) |
 | `ataegina db [name\|url\|create\|drop]` | Inspect/manage this tree's database (when `DB_NAME` is set) |
 | `ataegina ports` | Print this tree's index, ports, and urls |

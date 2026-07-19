@@ -20,6 +20,12 @@ ataegina \- worktree-aware dev launcher: collision-free ports, processes, and da
 .RB [ --force ]
 .br
 .B ataegina
+.I restart
+.RB [ both | backend | frontend ]
+.RB [ --scope
+.IR X ]
+.br
+.B ataegina
 .I logs
 .RB [ both | backend | frontend ]
 .RB [ -n
@@ -86,6 +92,17 @@ start is left alone;
 (or
 .BR ATE_DOWN_FORCE=1 )
 reaps it anyway.
+.TP
+.B restart \fR[both|backend|frontend] [--scope X]
+Stop this worktree's servers, then start them again \(em a
+.B down
+followed by an
+.BR up .
+All arguments are forwarded to
+.BR up ,
+which resolves the final scope; the stop phase mirrors the mode word, so
+.B restart backend
+bounces only the backend and leaves a running frontend alone.
 .TP
 .B logs \fR[both|backend|frontend] [-n N] [--no-follow]
 Follow this worktree's server logs.

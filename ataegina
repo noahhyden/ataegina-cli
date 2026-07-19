@@ -48,6 +48,7 @@ usage:
   ataegina up [both|backend|frontend] [--scope X]   start dev servers (default: both)
   ataegina down [both|backend|frontend] [--force]   stop dev servers (--force also
                                         reaps a slot held by a process ataegina did not start)
+  ataegina restart [both|backend|frontend] [--scope X]   stop then start dev servers
   ataegina logs [both|backend|frontend] [-n N] [--no-follow]   follow this tree's logs
   ataegina db [name|url|create|drop]    inspect/manage this tree's database
   ataegina ports                        show this tree's index, ports, urls
@@ -2294,6 +2295,23 @@ case "$CMD" in
       frontend) ate_stop_frontend ;;
     esac
     ;;
+  restart)
+    # Stop this tree's servers, then start them again: a `down` followed by `up`.
+    # The STOP phase mirrors a leading mode word (default both) so `restart backend`
+    # bounces only the backend and leaves a running frontend alone. ALL args are
+    # forwarded to cmd_up, which resolves the final scope (mode word and/or --scope)
+    # and owns the exit status.
+    shift
+    restart_mode=both
+    case "${1:-}" in both|backend|frontend) restart_mode="$1" ;; esac
+    case "$restart_mode" in
+      both)     ate_stop_frontend; ate_stop_backend ;;
+      backend)  ate_stop_backend ;;
+      frontend) ate_stop_frontend ;;
+    esac
+    cmd_up "$@"
+    ate_version_check_notice || true
+    ;;
   logs)
     shift
     cmd_logs "$@"
@@ -2429,7 +2447,7 @@ case "$CMD" in
     exit "$rc"
     ;;
   *)
-    echo "usage: ataegina [init|up|down|logs|db|ports|env|exec|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
+    echo "usage: ataegina [init|up|down|restart|logs|db|ports|env|exec|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
     echo "       ataegina --help    for full usage" >&2
     exit 2
     ;;

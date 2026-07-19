@@ -13,6 +13,11 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina restart [both|backend|frontend] [--scope X]`.** Bounces this
+  worktree's dev servers — a `down` followed by an `up`. Arguments forward to
+  `up` (which resolves the final scope and owns the exit status); the stop phase
+  mirrors a leading mode word (default both), so `restart backend` bounces only
+  the backend and leaves a running frontend alone.
 - **`ataegina exec [--] CMD [args...]`.** Runs `CMD` with this worktree's derived
   environment injected — the same variables `up` gives your servers and `env`
   prints — inheriting stdio and the current directory, exiting with `CMD`'s
