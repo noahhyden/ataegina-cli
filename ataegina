@@ -887,6 +887,29 @@ ate_report_ready() {
   return 0
 }
 
+# The contract behind `up --wait`. Block until $label's $port is accepting TCP
+# connections, up to $timeout seconds, then RETURN a status the caller turns into
+# up's exit code: 0 the moment it binds, 1 if the deadline passes without it. This
+# is what lets an agent write `ataegina up --wait && curl "$BACKEND_URL/health"`
+# with no hand-rolled poll loop and no race against a not-yet-bound port. Unlike
+# ate_report_ready (fire-and-forget, best-effort human messaging, always 0), this
+# is strict and terse. $timeout may be 0 (require ready right now). A crash-vs-slow
+# diagnostic is intentionally left to the non-wait path; on failure we point at the
+# log, which is where the reason lives.
+ate_wait_ready() {
+  local label="$1" port="$2" url="$3" timeout="$4" i=0
+  while :; do
+    if ate_port_listening "$port"; then
+      log "  $label ready -> $url"
+      return 0
+    fi
+    [ "$i" -ge "$timeout" ] && break
+    sleep 1; i=$((i + 1))
+  done
+  log "  $label NOT ready after ${timeout}s on :$port — see ${DEV_LOG_DIR:-?}/$label.log" >&2
+  return 1
+}
+
 # Database hooks. Like the start hooks, these DEFAULT implementations are defined
 # before the config is sourced, so a user who defines ate_db_create / ate_db_drop
 # in the config OVERRIDES them (e.g. to call `neon branches create`, a migration,
@@ -2004,6 +2027,10 @@ resolve_scope() {
 cmd_up() {
   local mode="both"
   UP_SCOPE_FLAG=""
+  # UP_WAIT empty = fire-and-forget (the default: report readiness, always exit 0).
+  # Set by --wait: block until every server this invocation launched is accepting
+  # connections, then exit 75 if any is not ready by the deadline.
+  local up_wait=""
   while [ $# -gt 0 ]; do
     case "$1" in
       both|backend|frontend) mode="$1" ;;
@@ -2021,10 +2048,21 @@ cmd_up() {
           *) echo "ataegina up: --scope must be frontend|backend|both|none" >&2; exit 2 ;;
         esac
         ;;
-      *) echo "ataegina up: unknown argument '$1' (both|backend|frontend, --scope X)" >&2; exit 2 ;;
+      # --wait bare uses ATE_UP_WAIT (default 60); --wait=N sets the timeout in
+      # seconds. Both block until the launched servers bind and gate up's exit code.
+      --wait)       up_wait="${ATE_UP_WAIT:-60}" ;;
+      --wait=*)     up_wait="${1#--wait=}" ;;
+      *) echo "ataegina up: unknown argument '$1' (both|backend|frontend, --scope X, --wait[=SECONDS])" >&2; exit 2 ;;
     esac
     shift
   done
+
+  # Validate the timeout up front (a non-negative integer), so a typo fails loudly
+  # here rather than being silently coerced in the readiness loop.
+  case "$up_wait" in
+    ''|*[!0-9]*)
+      [ -z "$up_wait" ] || { echo "ataegina up: --wait needs a non-negative integer of seconds (got '$up_wait')" >&2; exit 2; } ;;
+  esac
 
   # A TCP port must be <= 65535. If this tree's index puts a derived port past that
   # (a huge ATE_INDEX override, or a very large registry index), fail with a clear
@@ -2106,9 +2144,18 @@ cmd_up() {
       ;;
   esac
 
-  # Readiness: confirm each server we launched is actually listening (or point at
-  # its log if it is still coming up). This is what turns the old fire-and-forget
-  # "here's a URL, good luck" into an honest "ready" / "still starting" signal.
+  # Readiness. With --wait this is a CONTRACT: block until every server we launched
+  # is accepting connections and exit 75 if any is not ready by the deadline, so an
+  # agent can gate on `up --wait && <hit the server>`. Without --wait it stays the
+  # fire-and-forget best-effort report ("ready" / "still starting" / "FAILED"),
+  # always exiting 0. Nothing launched (scope backend/none with a shared backend, or
+  # scope none) is trivially ready.
+  if [ -n "$up_wait" ]; then
+    local up_rc=0
+    [ "$did_be" = 1 ] && { ate_wait_ready "backend"  "$BE_PORT" "$BACKEND_URL"                 "$up_wait" || up_rc=75; }
+    [ "$did_fe" = 1 ] && { ate_wait_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"     "$up_wait" || up_rc=75; }
+    return "$up_rc"
+  fi
   [ "$did_be" = 1 ] && ate_report_ready "backend"  "$BE_PORT" "$BACKEND_URL"
   [ "$did_fe" = 1 ] && ate_report_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"
   # Explicit success: without this the function returns the status of the last test
@@ -2192,7 +2239,7 @@ _ataegina() {
     return
   fi
   case "\${COMP_WORDS[1]}" in
-    up|down|restart|logs) COMPREPLY=( \$(compgen -W "both backend frontend --scope --force -n --no-follow" -- "\$cur") ) ;;
+    up|down|restart|logs) COMPREPLY=( \$(compgen -W "both backend frontend --scope --wait --force -n --no-follow" -- "\$cur") ) ;;
     db)      COMPREPLY=( \$(compgen -W "name url create drop" -- "\$cur") ) ;;
     config)  COMPREPLY=( \$(compgen -W "list get set unset path --global" -- "\$cur") ) ;;
     env)     COMPREPLY=( \$(compgen -W "--no-export" -- "\$cur") ) ;;
@@ -2215,7 +2262,7 @@ _ataegina() {
     return
   fi
   case \$words[2] in
-    up|down|restart|logs) compadd -- both backend frontend --scope --force -n --no-follow ;;
+    up|down|restart|logs) compadd -- both backend frontend --scope --wait --force -n --no-follow ;;
     db)      compadd -- name url create drop ;;
     config)  compadd -- list get set unset path --global ;;
     env)     compadd -- --no-export ;;
@@ -2380,11 +2427,16 @@ fi
 case "$CMD" in
   up)
     # Hand the rest of the args (everything after `up`) to cmd_up, which parses a
-    # MODE word and/or --scope and resolves the effective scope itself.
+    # MODE word and/or --scope and resolves the effective scope itself. Capture its
+    # exit code (0, or 75 under --wait when a server never became ready) so we exit
+    # with it explicitly rather than leaning on set -e — and still run the throttled
+    # version check either way.
     shift
-    cmd_up "$@"
+    up_rc=0
+    cmd_up "$@" || up_rc=$?
     # Opt-in, throttled, never blocks or affects the exit status of the work above.
     ate_version_check_notice || true
+    exit "$up_rc"
     ;;
   down)
     # Parse an optional mode word and a --force flag in any order (so both
@@ -2419,8 +2471,10 @@ case "$CMD" in
       backend)  ate_stop_backend ;;
       frontend) ate_stop_frontend ;;
     esac
-    cmd_up "$@"
+    restart_rc=0
+    cmd_up "$@" || restart_rc=$?
     ate_version_check_notice || true
+    exit "$restart_rc"
     ;;
   logs)
     shift
