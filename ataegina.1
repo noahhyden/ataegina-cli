@@ -51,6 +51,10 @@ ataegina \- worktree-aware dev launcher: collision-free ports, processes, and da
 .RB [ list | get | set | unset | path ]
 .br
 .B ataegina
+.I completion
+.RB { bash | zsh }
+.br
+.B ataegina
 .RB { update | --version | --help }
 .SH DESCRIPTION
 .B ataegina
@@ -169,6 +173,18 @@ With no subcommand, lists every known key, its effective value, and its source.
 .B update
 Self-update the installed script to the latest published release (checksum
 verified, with a backup of the previous version).
+.TP
+.B completion \fR{bash|zsh}
+Print a shell completion script to stdout, completing subcommands and one level
+of common arguments. Load it with
+.B "source <(ataegina completion bash)"
+(or
+.BR zsh ).
+Needs no worktree. Both
+.B ataegina
+and the
+.B ate
+alias are completed.
 .TP
 .B --version ", " -v
 Print the version and exit.

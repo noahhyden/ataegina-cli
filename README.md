@@ -215,6 +215,7 @@ always).
 | `ataegina doctor` | Run read-only diagnostics for this tree (never mutates; nonzero exit on a hard failure, so it works as a CI gate) |
 | `ataegina config <get\|set\|list\|unset\|path> [...]` | Read or change config values without opening the file (see "Configuration") |
 | `ataegina update` | Self-replace with the latest published release, checksum-verified, with a `.bak` rollback (see "Updating") |
+| `ataegina completion <bash\|zsh>` | Print a shell completion script (subcommands + common args) to stdout. Load it with `source <(ataegina completion bash)` (or `zsh`); needs no worktree |
 
 Flag / env:
 
@@ -534,6 +535,22 @@ once per 24 hours, offline-safe (any network error is swallowed silently and
 never changes a command's exit status), and does a single GET to the public
 GitHub releases API with no other telemetry. ataegina never auto-updates itself;
 updating is always an explicit `ataegina update`.
+
+## Shell completion
+
+`ataegina completion <bash|zsh>` prints a completion script (subcommands plus one
+level of common arguments) to stdout. Load it from your shell rc — it needs no
+git worktree, so it works anywhere:
+
+```sh
+# bash (~/.bashrc)
+source <(ataegina completion bash)
+
+# zsh (~/.zshrc, before compinit or via your fpath)
+source <(ataegina completion zsh)
+```
+
+Both `ataegina` and the `ate` alias are completed.
 
 ## Requirements
 

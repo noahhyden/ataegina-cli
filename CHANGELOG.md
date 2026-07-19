@@ -13,6 +13,11 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina completion <bash|zsh>`.** Prints a self-contained shell completion
+  script (subcommands plus one level of common arguments — mode words, `--scope`,
+  `db` / `config` subcommands) for `ataegina` and the `ate` alias. Load it with
+  `source <(ataegina completion bash)` (or `zsh`); it needs no worktree, so it
+  runs from a shell rc file anywhere.
 - **`ataegina restart [both|backend|frontend] [--scope X]`.** Bounces this
   worktree's dev servers — a `down` followed by an `up`. Arguments forward to
   `up` (which resolves the final scope and owns the exit status); the stop phase
