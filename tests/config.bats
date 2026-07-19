@@ -116,3 +116,61 @@ EOF
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "ataegina.config.sh"
 }
+
+# --- --global target + argument validation + unset edge branches ---------------
+
+# The --global target is $REGISTRY_DIR/ataegina.config.sh (the machine-local config).
+
+@test "config path --global prints the global (registry-dir) config path" {
+  cd "$REPO"
+  run ate config path --global
+  [ "$status" -eq 0 ]
+  [ "$output" = "$ATE_TMP/registry/ataegina.config.sh" ]
+}
+
+@test "config set --global writes into the global config file" {
+  cd "$REPO"
+  run ate config set --global BACK_PORT_BASE 7777
+  [ "$status" -eq 0 ]
+  grep -q '^BACK_PORT_BASE=' "$ATE_TMP/registry/ataegina.config.sh"
+}
+
+@test "config get with no KEY errors" {
+  cd "$REPO"; run ate config get
+  [ "$status" -eq 2 ]; echo "$output" | grep -qi "missing KEY"
+}
+
+@test "config set with no VALUE errors" {
+  cd "$REPO"; run ate config set BACK_PORT_BASE
+  [ "$status" -eq 2 ]; echo "$output" | grep -qi "missing VALUE"
+}
+
+@test "config unset with no KEY errors" {
+  cd "$REPO"; run ate config unset
+  [ "$status" -eq 2 ]; echo "$output" | grep -qi "missing KEY"
+}
+
+@test "config with an unknown subcommand errors" {
+  cd "$REPO"; run ate config frobnicate
+  [ "$status" -eq 2 ]; echo "$output" | grep -qi "unknown subcommand"
+}
+
+@test "config with too many arguments errors" {
+  cd "$REPO"; run ate config set A B C
+  [ "$status" -eq 2 ]; echo "$output" | grep -qi "too many arguments"
+}
+
+@test "config unset a key that is not in the file notes nothing removed" {
+  cd "$REPO"
+  ate config set BACK_PORT_BASE 8000
+  run ate config unset FRONT_PORT_BASE     # a known key, but not present in the file
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "nothing removed"
+}
+
+@test "config unset when no config file exists errors" {
+  cd "$REPO"                                 # make_repo leaves no config file
+  run ate config unset BACK_PORT_BASE
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "no config file"
+}
