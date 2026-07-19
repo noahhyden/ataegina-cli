@@ -11,6 +11,17 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Line-coverage gate.** `scripts/coverage.sh` measures `ataegina`'s coverage
+  from the bats suite (per-file `bashcov` runs, unioned — a single
+  `bashcov -- bats tests/` under-counts because bats' many bash processes race
+  on SimpleCov's result file) and a CI `coverage` job fails the build below 99%.
+  Current coverage is 99.07%; the push to reach it added ~780 lines of tests
+  (`ataegina` itself is unchanged) covering `update`/version-check, the
+  `ss`/`fuser`/`proc`/`lsof` port backends, `logs`, `config`, `up`, `doctor`,
+  `resolve_scope`, `list`, and `move`.
+
 ## [0.7.0] - 2026-07-19
 
 ### Added
@@ -258,5 +269,7 @@ line but were not separately git-tagged.
   PATH, registry, config, runnable surfaces, port availability, URLs) usable as a
   CI gate.
 
+[Unreleased]: https://github.com/noahhyden/ataegina-cli/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/noahhyden/ataegina-cli/releases/tag/v0.7.0
 [0.6.0]: https://github.com/noahhyden/ataegina-cli/releases/tag/v0.6.0
 [0.5.0]: https://github.com/noahhyden/ataegina-cli/releases/tag/v0.5.0
