@@ -58,3 +58,20 @@ teardown() {
   # _ate_stop_port prints to stderr; run merges it into $output.
   echo "$output" | grep -qi "nothing to stop"
 }
+
+@test "down --force is accepted and parses the force flag" {
+  cd "$REPO"
+  # Nothing is running, so this just exercises the --force flag parse + both-side
+  # teardown path (a foreign-holder reap needs a real listener; that's covered by
+  # the fake-tool integration tier). Must still exit 0 with nothing to stop.
+  run ate down --force
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "nothing to stop"
+}
+
+@test "down -f is accepted as the force alias" {
+  cd "$REPO"
+  run ate down -f
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "nothing to stop"
+}

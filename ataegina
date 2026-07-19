@@ -51,6 +51,8 @@ usage:
   ataegina logs [both|backend|frontend] [-n N] [--no-follow]   follow this tree's logs
   ataegina db [name|url|create|drop]    inspect/manage this tree's database
   ataegina ports                        show this tree's index, ports, urls
+  ataegina env [--no-export]            print this tree's derived env as eval-able
+                                        shell (eval "$(ataegina env)")
   ataegina list                         show all registered worktrees
   ataegina move N                       relocate this worktree to index N (new ports)
   ataegina prune                        drop registry entries whose tree is gone
@@ -2094,6 +2096,39 @@ cmd_up() {
   return 0
 }
 
+# Print this worktree's derived environment as eval-able shell — the SAME variables
+# `up` injects into your dev servers (see the export block below), so
+# `eval "$(ataegina env)"` reproduces that environment in your own shell and
+# `ataegina env --no-export > .env` writes a sourceable file. Values are
+# single-quoted via config_quote so a path with spaces/quotes round-trips exactly.
+# Read-only: derives from the registry + config, starts nothing, touches no network.
+cmd_env() {
+  local prefix='export '
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-export) prefix='' ;;
+      *) echo "ataegina env: unknown option '$1' (--no-export)" >&2; exit 2 ;;
+    esac
+    shift
+  done
+  printf '%sATE_INDEX=%s\n'             "$prefix" "$(config_quote "$N")"
+  printf '%sREPO_ROOT=%s\n'             "$prefix" "$(config_quote "$TREE")"
+  printf '%sFRONTEND_PORT=%s\n'         "$prefix" "$(config_quote "$FE_PORT")"
+  printf '%sBACKEND_PORT=%s\n'          "$prefix" "$(config_quote "$BE_PORT")"
+  printf '%sFRONTEND_URL=%s\n'          "$prefix" "$(config_quote "http://localhost:$FE_PORT")"
+  printf '%sBACKEND_URL=%s\n'           "$prefix" "$(config_quote "http://localhost:$BE_PORT")"
+  printf '%sFRONTEND_API_BASE_URL=%s\n' "$prefix" "$(config_quote "http://localhost:$BE_PORT")"
+  printf '%sDEV_LOG_DIR=%s\n'           "$prefix" "$(config_quote "$LOG_DIR")"
+  # DB name + URL only when a database is configured (mirrors the export block).
+  # $_ate_db_url is set there iff DB_NAME and DB_URL_TEMPLATE are both present.
+  if [ -n "${ATE_DB_NAME:-}" ]; then
+    printf '%sATE_DB_NAME=%s\n' "$prefix" "$(config_quote "$ATE_DB_NAME")"
+    if [ -n "${_ate_db_url:-}" ]; then
+      printf '%s%s=%s\n' "$prefix" "${DB_URL_VAR:-DATABASE_URL}" "$(config_quote "$_ate_db_url")"
+    fi
+  fi
+}
+
 # A bare `ataegina` (no args) prints usage and exits at the top-level case above,
 # so $1 is always a real subcommand by the time we get here.
 CMD="${1:-}"
@@ -2271,6 +2306,10 @@ case "$CMD" in
     echo "  backend:  http://localhost:$BE_PORT"
     echo "  logs:     $LOG_DIR"
     ;;
+  env)
+    shift
+    cmd_env "$@"
+    ;;
   list)
     printf '0\t%s (primary)\n' "$PRIMARY"
     if [ -f "$REGISTRY" ]; then
@@ -2370,7 +2409,7 @@ case "$CMD" in
     exit "$rc"
     ;;
   *)
-    echo "usage: ataegina [init|up|down|logs|db|ports|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
+    echo "usage: ataegina [init|up|down|logs|db|ports|env|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
     echo "       ataegina --help    for full usage" >&2
     exit 2
     ;;

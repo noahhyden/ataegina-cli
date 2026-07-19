@@ -206,6 +206,7 @@ always).
 | `ataegina logs [both\|backend\|frontend] [-n N] [--no-follow]` | Follow this tree's server logs live (scoped to the current worktree) |
 | `ataegina db [name\|url\|create\|drop]` | Inspect/manage this tree's database (when `DB_NAME` is set) |
 | `ataegina ports` | Print this tree's index, ports, and urls |
+| `ataegina env [--no-export]` | Print this tree's derived environment (index, ports, URLs, log dir, and the per-worktree DB name + URL when configured) as eval-able shell — the same variables `up` injects into your servers. `eval "$(ataegina env)"` reproduces it in your own shell; `--no-export` drops the `export ` prefix for `> .env` |
 | `ataegina move N` | Relocate this worktree to index `N` (and its derived port slot); stops the old slot's servers, refuses an index another live worktree holds, and rejects index 0 |
 | `ataegina list` | List every registered worktree (flags stale entries) |
 | `ataegina prune` | Drop registry entries whose worktree directory is gone |
@@ -275,6 +276,17 @@ FRONTEND_URL            http://localhost:$FRONTEND_PORT
 FRONTEND_API_BASE_URL   http://localhost:$BACKEND_PORT  (same value as BACKEND_URL)
 DEV_LOG_DIR             this worktree's log dir
 ATE_DB_NAME             this worktree's database name (only when DB_NAME is set)
+```
+
+**Need those values in your own shell or scripts?** `ataegina env` prints exactly
+this environment (plus the DB URL under `DB_URL_VAR` when configured) as eval-able
+shell, so you can pull it into a one-off command, a Makefile, or a `.env` without
+starting anything:
+
+```sh
+eval "$(ataegina env)"          # this tree's ports/URLs/DB now in your shell
+curl "$BACKEND_URL/health"      # e.g. hit the derived backend port
+ataegina env --no-export > .env # or write a sourceable .env (no `export ` prefix)
 ```
 
 **Declarative config (the common case).** Set `FRONTEND_DIR` / `FRONTEND_CMD`

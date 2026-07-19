@@ -30,6 +30,14 @@ run_doctor() {
   echo "$output" | grep -qi "no config found"
 }
 
+@test "doctor: a worktree with no registry entry yet is warned" {
+  cd "$REPO"
+  # A forced index is returned by resolve_index WITHOUT registering it, so this
+  # tree has no registry row — exercising the 'none for this tree yet' branch.
+  run_doctor ATE_INDEX=7
+  echo "$output" | grep -qi "registry entry: none for this tree yet"
+}
+
 @test "doctor: a stale registry entry (its worktree is gone) is reported" {
   local wt; wt="$(add_worktree "$REPO" wtA)"
   ( cd "$wt" && env ATE_REGISTRY_DIR="$ATE_TMP/registry" ATE_PORT_TOOL=none \

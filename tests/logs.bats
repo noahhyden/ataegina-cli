@@ -48,22 +48,25 @@ teardown() { common_teardown; }
   echo "$output" | grep -q "FE-only"
 }
 
+# The refuted tokens must not appear anywhere else in $output — including the
+# tailing banner, which echoes the log's full path under a mktemp dir whose random
+# suffix could contain a short token like "l1"/"a1". Use distinctive markers.
 @test "logs -n N limits the tail length" {
-  printf 'l1\nl2\nl3\nl4\n' > "$LD/backend.log"
+  printf 'LOGTOK1\nLOGTOK2\nLOGTOK3\nLOGTOK4\n' > "$LD/backend.log"
   cd "$REPO"
   run ate logs backend --no-follow -n 2
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "l4"
-  refute_output_has "l1"
+  echo "$output" | grep -q "LOGTOK4"
+  refute_output_has "LOGTOK1"
 }
 
 @test "logs -nN (glued form) also limits the tail length" {
-  printf 'a1\na2\na3\n' > "$LD/backend.log"
+  printf 'LOGTOKA\nLOGTOKB\nLOGTOKC\n' > "$LD/backend.log"
   cd "$REPO"
   run ate logs backend --no-follow -n1
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "a3"
-  refute_output_has "a1"
+  echo "$output" | grep -q "LOGTOKC"
+  refute_output_has "LOGTOKA"
 }
 
 @test "logs with an unknown argument exits 2" {

@@ -31,7 +31,7 @@ ataegina \- worktree-aware dev launcher: collision-free ports, processes, and da
 .RB [ name | url | create | drop ]
 .br
 .B ataegina
-.RB { ports | list | move
+.RB { ports | env | list | move
 .IR N | prune | doctor }
 .br
 .B ataegina
@@ -90,6 +90,21 @@ database name.
 .TP
 .B ports
 Show this worktree's index, derived ports, and URLs.
+.TP
+.B env " [\-\-no\-export]"
+Print this worktree's derived environment (index, ports, URLs, log dir, and the
+per\-worktree database name and URL when configured) as eval\-able shell \(em the
+same variables
+.B up
+injects into your dev servers. Use
+.B eval \(dq$(ataegina env)\(dq
+to load it into your own shell;
+.B \-\-no\-export
+omits the
+.B export
+prefix so the output can be redirected to a
+.I .env
+file. Read\-only.
 .TP
 .B list
 Show all registered worktrees and their indices.
