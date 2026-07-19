@@ -95,11 +95,14 @@ teardown() { common_teardown; }
 }
 
 @test "logs (follow, default) exercises the -f path and streams the log" {
+  # `timeout` is GNU-only; macOS ships it as `gtimeout` (coreutils) or not at all.
+  local to; to="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$to" ] || skip "no timeout/gtimeout available to bound the follow path"
   echo "FOLLOW-line" > "$LD/backend.log"
   cd "$REPO"
   # Default follow=1 -> `exec tail -f` blocks; timeout ends it. 124 = timed out.
   run env ATE_REGISTRY_DIR="$ATE_TMP/registry" ATE_PORT_TOOL=none \
     LOG_DIR_BASE="$ATE_TMP/logs/ate-wt" \
-    timeout 2 bash "$ATE_SCRIPT" logs backend
+    "$to" 2 bash "$ATE_SCRIPT" logs backend
   echo "$output" | grep -q "FOLLOW-line"
 }
