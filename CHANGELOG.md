@@ -13,6 +13,13 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina env`.** Prints this worktree's derived environment — the same
+  variables `up` injects into your dev servers (`ATE_INDEX`, `FRONTEND_PORT` /
+  `BACKEND_PORT`, the URLs, `DEV_LOG_DIR`, and, when a database is configured,
+  `ATE_DB_NAME` plus the URL under `DB_URL_VAR`) — as single-quoted, eval-able
+  shell. `eval "$(ataegina env)"` reproduces that environment in your own shell
+  and `ataegina env --no-export > .env` writes a sourceable file. Read-only:
+  derives from the registry and config, starts nothing, touches no network.
 - **Line-coverage gate.** `scripts/coverage.sh` measures `ataegina`'s coverage
   from the bats suite (per-file `bashcov` runs, unioned — a single
   `bashcov -- bats tests/` under-counts because bats' many bash processes race
