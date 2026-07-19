@@ -37,3 +37,11 @@ teardown() { common_teardown; }
   [ "$status" -ne 0 ]
   echo "$output" | grep -qiE "usage:|unknown"
 }
+
+@test "down with an unknown mode errors" {
+  local repo; repo="$(make_repo "$ATE_TMP/repo")"
+  cd "$repo"
+  run ate down bogusmode
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "unknown mode"
+}

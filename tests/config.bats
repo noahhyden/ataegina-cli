@@ -174,3 +174,10 @@ EOF
   [ "$status" -ne 0 ]
   echo "$output" | grep -qi "no config file"
 }
+
+@test "config list with no config file notes '(none found)'" {
+  cd "$REPO"                                 # no config present
+  run ate config list
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "none found"
+}
