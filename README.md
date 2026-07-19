@@ -218,7 +218,7 @@ Flag / env:
 | Flag / env var | Effect |
 |---|---|
 | `ataegina --version` / `-v` | Print the version and exit |
-| `ataegina --help` / `-h` | Print full usage and exit |
+| `ataegina --help` / `-h` | Print full usage and exit (also available as `man ataegina` when installed via `install.sh`) |
 | `ATE_INDEX=<n>` | Force a specific index for one invocation (bypass auto-assign) |
 | `ATE_CONFIG=<path>` | Use an explicit config file path |
 | `ATE_REGISTRY_DIR` | Override the registry root (per-repo files go under its `repos/`) |

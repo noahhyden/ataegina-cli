@@ -1,0 +1,256 @@
+.\" Man page for ataegina.
+.\" Kept in sync by hand with the `usage()` text in the ataegina script.
+.TH ATAEGINA 1 "2026-07-19" "ataegina" "User Commands"
+.SH NAME
+ataegina \- worktree-aware dev launcher: collision-free ports, processes, and databases
+.SH SYNOPSIS
+.B ataegina
+.I init
+.RI [ options ]
+.br
+.B ataegina
+.I up
+.RB [ both | backend | frontend ]
+.RB [ --scope
+.IR X ]
+.br
+.B ataegina
+.I down
+.RB [ both | backend | frontend ]
+.RB [ --force ]
+.br
+.B ataegina
+.I logs
+.RB [ both | backend | frontend ]
+.RB [ -n
+.IR N ]
+.RB [ --no-follow ]
+.br
+.B ataegina
+.I db
+.RB [ name | url | create | drop ]
+.br
+.B ataegina
+.RB { ports | list | move
+.IR N | prune | doctor }
+.br
+.B ataegina
+.I config
+.RB [ list | get | set | unset | path ]
+.br
+.B ataegina
+.RB { update | --version | --help }
+.SH DESCRIPTION
+.B ataegina
+gives every git worktree \(em and every AI coding agent working in one \(em its
+own collision-free runtime: derived ports, tracked processes, and an isolated
+per-worktree database, from a single zero-dependency bash script. No Docker, no
+daemon, no YAML.
+.PP
+The moment you run more than one copy of a repo at once, the stack collides:
+dev servers fight for the same ports, share one dev database, and leak untracked
+background processes. ataegina assigns each worktree an index (the primary
+checkout is always index 0) and derives its ports as
+.IR FRONT_PORT_BASE + N " and " BACK_PORT_BASE + N ,
+so N worktrees coexist on the bare host.
+.PP
+Run
+.B ataegina init
+once to detect your stack and write a declarative
+.IR ataegina.config.sh .
+Its built-in hooks read that config, so most users never write any bash.
+.SH COMMANDS
+.TP
+.B init \fR[options]
+Detect the frontend and backend and write
+.IR ataegina.config.sh .
+Interactive by default; each detected value is offered as the prompt default.
+.TP
+.B up \fR[both|backend|frontend] [--scope X]
+Start dev servers for this worktree (default: both). Ensures the per-worktree
+database exists first (when configured). Reports each server as ready, still
+starting, or failed. If the slot port is held by a process ataegina did not
+start, it says so and does not launch on top of it.
+.TP
+.B down \fR[both|backend|frontend] [--force]
+Stop this worktree's servers, reaping the whole process tree (workers and
+helpers, not just the port holder). A slot held by a process ataegina did not
+start is left alone;
+.B --force
+(or
+.BR ATE_DOWN_FORCE=1 )
+reaps it anyway.
+.TP
+.B logs \fR[both|backend|frontend] [-n N] [--no-follow]
+Follow this worktree's server logs.
+.TP
+.B db \fR[name|url|create|drop]
+Inspect or manage this worktree's database. With no argument, prints the derived
+database name.
+.TP
+.B ports
+Show this worktree's index, derived ports, and URLs.
+.TP
+.B list
+Show all registered worktrees and their indices.
+.TP
+.B move \fIN
+Relocate this worktree to index
+.IR N ,
+assigning a new port pair. Useful when the auto-assigned slot's ports are
+permanently taken. The primary (index 0) cannot be moved.
+.TP
+.B prune
+Drop registry entries whose worktree directory no longer exists, freeing those
+indices for reuse.
+.TP
+.B doctor
+Read-only diagnostics for this worktree: resolved index, ports, port-probe tool,
+config source, start hooks, and database status.
+.TP
+.B config \fR[list|get|set|unset|path]
+Read or write scalar keys in
+.IR ataegina.config.sh .
+With no subcommand, lists every known key, its effective value, and its source.
+.TP
+.B update
+Self-update the installed script to the latest published release (checksum
+verified, with a backup of the previous version).
+.TP
+.B --version ", " -v
+Print the version and exit.
+.TP
+.B --help ", " -h
+Print usage and exit.
+.SH "UP OPTIONS"
+.TP
+.B --scope X
+Force the start scope:
+.IR frontend | backend | both | none .
+Without it, the scope is auto-detected from the worktree's git diff (or read from
+a
+.RI ` scope: '
+line in
+.BR $ATE_TASK_FILE ,
+if set). Index 0 (the primary) is always both.
+.SH "INIT OPTIONS"
+.TP
+.B --yes ", " -y ", " --non-interactive
+Accept all detected values with no prompts (as in CI).
+.TP
+.B --frontend-dir \fIDIR\fR ", " --backend-dir \fIDIR
+Force the frontend/backend directory, skipping probing.
+.TP
+.B --force
+Overwrite an existing
+.IR ataegina.config.sh .
+.TP
+.B --dry-run
+Print the generated config to stdout and write nothing.
+.SH ENVIRONMENT
+.TP
+.B ATE_INDEX=\fIn
+Force a specific index for one invocation.
+.TP
+.B ATE_CONFIG=\fIpath
+Use an explicit config file path.
+.TP
+.B ATE_REGISTRY_DIR ", " ATE_REGISTRY
+Override the registry location.
+.TP
+.B ATE_SCOPE_AUTO=0
+Disable scope auto-detection in
+.B up
+(force both).
+.TP
+.B ATE_BASE_BRANCH
+Base ref that scope detection diffs against.
+.TP
+.B ATE_DOWN_FORCE=1
+Make
+.B down
+reap a slot held by a process ataegina did not start (same as
+.BR "down --force" ).
+.TP
+.B ATE_PORT_TOOL
+Force the port-probe backend:
+.IR lsof | ss | fuser | proc | none
+(auto-detected otherwise).
+.TP
+.B ATE_UPDATE_CHECK=1
+Opt in to a throttled (at most once per 24h) "newer version" notice at the end of
+.BR up .
+Off by default. One GET to the public GitHub API; silent on failure. No other
+telemetry.
+.TP
+.B GH_TOKEN
+Optional GitHub token, sent as a bearer to the release feed.
+.SH "CONFIG KEYS"
+Set in
+.IR ataegina.config.sh ;
+see
+.IR ataegina.config.example.sh .
+.TP
+.B FRONT_PORT_BASE ", " BACK_PORT_BASE
+Port bases (default 5173 / 8000).
+.TP
+.B FRONTEND_DIR ", " FRONTEND_CMD ", " FRONTEND_ENV
+Declarative frontend directory, start command, and extra env.
+.TP
+.B BACKEND_DIR ", " BACKEND_CMD ", " BACKEND_ENV
+Declarative backend directory, start command, and extra env.
+.TP
+.B DB_NAME
+Set to enable per-worktree databases (off when unset).
+.TP
+.B DB_KIND
+.IR postgres | mysql | sqlite | custom
+(default postgres).
+.TP
+.B DB_SUFFIX
+Worktree DB name =
+.IR DB_NAME + DB_SUFFIX + N
+(default _wt).
+.TP
+.B DB_URL_TEMPLATE ", " DB_URL_VAR
+Build and inject the per-worktree connection URL.
+.TP
+.B DB_AUTO_CREATE
+.B up
+ensures the worktree DB exists (default 1).
+.TP
+.B DB_CREATE_CMD ", " DB_DROP_CMD
+Override the per-kind create/drop commands.
+.SH FILES
+.TP
+.I ataegina.config.sh
+Per-repo declarative configuration, at the repository root.
+.TP
+.I $XDG_CONFIG_HOME/ataegina/ataegina.config.sh
+Global configuration (written by
+.BR "config set --global" ).
+.SH EXIT STATUS
+Returns 0 on success. A usage error exits 2; other failures exit nonzero with a
+message on standard error.
+.SH EXAMPLES
+.TP
+Configure a repo and bring up its stack:
+.EX
+ataegina init --yes
+ataegina up
+.EE
+.TP
+Start only the backend for the current worktree:
+.EX
+ataegina up backend
+.EE
+.TP
+Clear a slot even if held by an unrelated process:
+.EX
+ataegina down --force
+.EE
+.SH "SEE ALSO"
+.BR git-worktree (1).
+Project homepage: https://github.com/noahhyden/ataegina-cli
+.SH AUTHOR
+Noah Hyden and contributors.
