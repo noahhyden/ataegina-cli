@@ -190,6 +190,31 @@ mock_repo() {
   [ "$(tree_count)" = 0 ]                         # nothing leaked
 }
 
+@test "fake: up relaunches when the recorded pid is alive but UNVERIFIABLE (empty pidstart)" {
+  local repo="$ATE_TMP/repo"
+  mock_repo "$repo" "MOCK_TAG=$TAG"
+  cd "$repo"
+  # Simulate a recorded launch we cannot prove is ours: a LIVE pid in backend.pid but
+  # an EMPTY backend.pidstart (as happens when the launch pid dies before its
+  # start-time can be recorded). Such a stale pid may since have been reused by an
+  # unrelated process, so it is NOT proof of an in-flight launch — `up` must relaunch,
+  # not refuse with "already starting". The foreign pid carries $TAG so teardown reaps it.
+  local ld="$ATE_TMP/logs/ate-wt0"; mkdir -p "$ld"
+  ( exec -a "${TAG}-foreign" sleep 60 ) &
+  echo "$!" > "$ld/backend.pid"
+  : > "$ld/backend.pidstart"                 # unverifiable (empty) start-time
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  refute_output_has "already starting"       # must not false-block on an unverifiable record
+  wait_listening "$BE_BASE"                    # a real server actually came up
+
+  # Cleanup only: `ate down` reaps the real server; the intentional foreign sleep
+  # (which carries $TAG so teardown reaps it) is NOT ataegina's to kill, so no
+  # tree-gone assertion here — that would (correctly) never reach zero.
+  ate down backend >/dev/null 2>&1 || true
+}
+
 @test "fake: up relaunches after the previous server was killed externally (crash recovery)" {
   local repo="$ATE_TMP/repo"
   mock_repo "$repo" "MOCK_TAG=$TAG"

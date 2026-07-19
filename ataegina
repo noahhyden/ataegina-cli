@@ -607,13 +607,14 @@ _ate_launch_in_progress() {
   lpid="$(cat "$pidfile" 2>/dev/null || true)"
   [ -n "$lpid" ] || return 1
   kill -0 "$lpid" 2>/dev/null || return 1     # recorded launch pid is dead -> not in progress
-  if [ -f "$startfile" ]; then
-    want="$(cat "$startfile" 2>/dev/null || true)"
-    got="$(ate_pid_starttime "$lpid")"
-    # start-time no longer matches -> the pid was recycled by an unrelated process
-    [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ] && return 1
-  fi
-  return 0
+  # Require POSITIVE proof of ownership: a recorded start-time that STILL matches the
+  # live pid. Without it — a missing/empty start-time, or a mismatch (the pid was
+  # recycled by an unrelated process since) — do NOT claim a launch is in progress. An
+  # unverifiable record must never block a fresh `up` from starting the server.
+  want="$(cat "$startfile" 2>/dev/null || true)"
+  got="$(ate_pid_starttime "$lpid")"
+  if [ -n "$want" ] && [ -n "$got" ] && [ "$want" = "$got" ]; then return 0; fi
+  return 1
 }
 
 ate_start_backend() {
