@@ -50,6 +50,26 @@ doctor() {
     bash "$ATE_SCRIPT" doctor
 }
 
+make_fake_lsof() {
+  cat > "$BIN/lsof" <<'EOF'
+#!/usr/bin/env bash
+# fake lsof: `lsof -ti tcp:PORT` -> a pid for our FAKE_PORT, nothing otherwise.
+p=""; for a in "$@"; do case "$a" in tcp:*) p="${a#tcp:}" ;; esac; done
+[ "$p" = "${FAKE_PORT:-0}" ] && echo 4242
+EOF
+  chmod +x "$BIN/lsof"
+}
+
+@test "lsof backend: doctor reports the slot in use via lsof (deterministic, fake)" {
+  make_fake_lsof
+  cd "$REPO"
+  doctor ATE_PORT_TOOL=lsof FAKE_PORT="$BE"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "port tool: lsof"
+  echo "$output" | grep -qi "backend port :$BE in use"
+  echo "$output" | grep -q "pid 4242"
+}
+
 @test "ss backend: doctor reports the slot in use, with the pid from ss -p" {
   make_fake_ss
   cd "$REPO"
