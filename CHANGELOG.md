@@ -13,6 +13,13 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina ports --json`.** Prints this worktree's derived slot as a single
+  line of JSON (index, repo_root, frontend/backend port+url, log_dir, and the
+  per-worktree database name+url when configured) instead of the human table, so
+  coding agents and scripts can parse it directly. `db` is `null` when no database
+  is configured; `db.url` is `null` when `DB_NAME` is set without a
+  `DB_URL_TEMPLATE`. The first of a set of agent-native additions — see
+  `docs/design/agent-native.md`.
 - **`ataegina open [frontend|backend]`.** Opens this worktree's derived URL in a
   browser (default `frontend`). Opener resolution: `$BROWSER` (scriptable, may
   carry its own flags), else `xdg-open` (Linux), else `open` (macOS); with none
