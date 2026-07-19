@@ -32,30 +32,43 @@ Run from the repo root, working tree clean.
    ```
 
 4. **Tag and push.** The tag is what `install.sh` and `update` resolve and fetch
-   the per-tag raw files from (`<base>/vX.Y.Z/ataegina`).
+   the per-tag raw files from (`<base>/vX.Y.Z/ataegina`). Pushing the tag is also
+   what **triggers the automated release** (steps 5–6 below); the checklist above
+   is the only manual part.
 
    ```sh
    git tag vX.Y.Z
    git push origin main vX.Y.Z
    ```
 
-5. **Create the GitHub release** on tag `vX.Y.Z`, attaching `ataegina` and
-   `ataegina.sha256` as assets. The `update` check reads `tag_name` from the
-   releases API, so a release must exist (not just a tag) for clients to see the
-   new version; the Homebrew formula downloads the `ataegina` asset, so it must
-   be attached. Add release notes / a changelog summary.
+5. **The GitHub release is created automatically.** The `.github/workflows/release.yml`
+   workflow fires on the `vX.Y.Z` tag: it re-verifies `VERSION == tag` and that
+   the committed `ataegina.sha256` matches the script (a mismatch fails the run,
+   so a bad release never ships), then publishes the release with `ataegina`,
+   `ataegina.sha256`, and `ataegina.1` attached. Notes are taken from the matching
+   `## [X.Y.Z]` section of `CHANGELOG.md` when present, else auto-generated.
+
+   To publish by hand instead (e.g. the workflow is disabled):
 
    ```sh
-   gh release create vX.Y.Z ataegina ataegina.sha256 --title "vX.Y.Z" --notes "..."
+   gh release create vX.Y.Z ataegina ataegina.sha256 ataegina.1 --title "vX.Y.Z" --notes "..."
    ```
 
-6. **Bump the Homebrew formula** in the `noahhyden/homebrew-tap` repo
-   (`Formula/ataegina.rb`): point `url` at the new tag and update `sha256` to the
-   digest from `ataegina.sha256` (the bare hex, e.g. `awk '{print $1}' ataegina.sha256`).
+6. **The Homebrew formula is bumped automatically** *when a `HOMEBREW_TAP_TOKEN`
+   repo secret is configured* (a PAT with `contents:write` on
+   `noahhyden/homebrew-tap`). The `homebrew` job points `Formula/ataegina.rb`'s
+   `url` at the new release asset and sets `sha256` to the script's digest, then
+   commits and pushes. Without the secret the job self-skips and you must bump the
+   formula manually:
+
+   ```sh
+   # in noahhyden/homebrew-tap: point url at the new tag, set sha256 to:
+   awk '{print $1}' ataegina.sha256
+   ```
+
    `brew style` and `brew audit --formula noahhyden/tap/ataegina` must pass.
-   A release without this step leaves `brew install`/`brew upgrade` on the old
-   version. The `curl | sh` and `ataegina update` paths track `latest`
-   automatically and need no per-release edit.
+   The `curl | sh` and `ataegina update` paths track `latest` automatically and
+   need no per-release edit.
 
 ## Verify before announcing
 

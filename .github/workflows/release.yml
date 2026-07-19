@@ -1,0 +1,150 @@
+name: Release
+
+# Automates the manual steps in RELEASE.md. Fires when a vX.Y.Z tag is pushed:
+# it re-verifies the release invariants (VERSION == tag, committed checksum
+# matches the script), publishes a GitHub Release with the script + checksum +
+# man page attached, and — if a cross-repo tap token is configured — bumps the
+# Homebrew formula. The checksum/version regeneration itself stays a maintainer
+# step (see RELEASE.md); this workflow only PUBLISHES what was committed and tags
+# a mismatch as a hard failure so a bad release can never ship.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # create the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify VERSION matches the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver="$(sed -n 's/^VERSION="\{0,1\}\([0-9][^"]*\)"\{0,1\}.*/\1/p' ataegina | head -n1)"
+          echo "script VERSION: $ver   tag: $TAG"
+          if [ "$ver" != "${TAG#v}" ]; then
+            echo "::error::VERSION ($ver) does not match the release tag ($TAG); bump VERSION= before tagging (see RELEASE.md)"
+            exit 1
+          fi
+          echo "ok: VERSION matches the tag"
+
+      - name: Verify the committed checksum matches the script
+        run: |
+          if ! sha256sum -c ataegina.sha256; then
+            echo "::error::ataegina.sha256 does not match the committed ataegina; regenerate it (see RELEASE.md) — clients would abort on a checksum mismatch"
+            exit 1
+          fi
+
+      - name: Parse-check the script
+        run: bash -n ataegina
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver="${TAG#v}"
+          # Pull the section between `## [<ver>]` and the next `## [` header.
+          notes="$(awk -v v="$ver" '
+            $0 ~ "^## \\[" v "\\]" {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md)"
+          if [ -n "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            {
+              echo "notes<<__EOF__"
+              printf '%s\n' "$notes"
+              echo "__EOF__"
+            } >> "$GITHUB_OUTPUT"
+            echo "found CHANGELOG notes for $ver"
+          else
+            echo "notes=" >> "$GITHUB_OUTPUT"
+            echo "no CHANGELOG section for $ver; will auto-generate notes"
+          fi
+
+      - name: Create the GitHub Release (with assets)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NOTES: ${{ steps.notes.outputs.notes }}
+        run: |
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > /tmp/relnotes.md
+            gh release create "$TAG" ataegina ataegina.sha256 ataegina.1 \
+              --title "$TAG" --notes-file /tmp/relnotes.md
+          else
+            gh release create "$TAG" ataegina ataegina.sha256 ataegina.1 \
+              --title "$TAG" --generate-notes
+          fi
+
+  # Bump the Homebrew tap formula. Runs only when a HOMEBREW_TAP_TOKEN secret (a
+  # PAT with `contents:write` on noahhyden/homebrew-tap) is configured; without
+  # it the job self-skips with a note, so forks and unconfigured repos are quiet.
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for a tap token
+        id: gate
+        env:
+          TOK: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "$TOK" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "no HOMEBREW_TAP_TOKEN secret; skipping the tap bump (do it manually per RELEASE.md)"
+          fi
+
+      - name: Check out the tap
+        if: steps.gate.outputs.have == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: noahhyden/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Point the formula at the new release
+        if: steps.gate.outputs.have == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          formula="tap/Formula/ataegina.rb"
+          if [ ! -f "$formula" ]; then
+            echo "::error::$formula not found in the tap; bump it manually (see RELEASE.md)"
+            exit 1
+          fi
+          # The formula downloads the release's `ataegina` asset; its sha256 is the
+          # digest of that exact file, which equals sha256 of the tag's raw script.
+          url="https://github.com/$REPO/releases/download/$TAG/ataegina"
+          sha="$(curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/ataegina" | sha256sum | awk '{print $1}')"
+          echo "new url:    $url"
+          echo "new sha256: $sha"
+          sed -i -E "s|^([[:space:]]*url[[:space:]]+\").*(\")|\1$url\2|" "$formula"
+          sed -i -E "s|^([[:space:]]*sha256[[:space:]]+\").*(\")|\1$sha\2|" "$formula"
+          echo "---- updated formula ----"
+          grep -E '^[[:space:]]*(url|sha256)[[:space:]]+"' "$formula" || true
+
+      - name: Commit and push the formula bump
+        if: steps.gate.outputs.have == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd tap
+          git config user.name "ate release bot"
+          git config user.email "ci@example.com"
+          if git diff --quiet; then
+            echo "formula already up to date; nothing to commit"
+            exit 0
+          fi
+          git add Formula/ataegina.rb
+          git commit -m "ataegina $TAG"
+          git push
