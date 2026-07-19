@@ -48,7 +48,7 @@ teardown() {
   while [ "$i" -lt 20 ] && kill -0 "$LAUNCHED_PID" 2>/dev/null; do
     sleep 0.1; i=$((i + 1))
   done
-  ! kill -0 "$LAUNCHED_PID" 2>/dev/null
+  refute_alive "$LAUNCHED_PID"
 }
 
 @test "down with nothing running reports nothing to stop (no error)" {

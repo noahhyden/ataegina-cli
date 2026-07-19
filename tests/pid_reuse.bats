@@ -61,5 +61,5 @@ wt_logdir() { printf '%s\n' "$ATE_TMP/logs/ate-wt1"; }
   ate down backend >/dev/null 2>&1 || true
   sleep 1
   # Start-time matched -> adopted as a kill root -> the process is gone.
-  ! kill -0 "$mine" 2>/dev/null
+  refute_alive "$mine"
 }

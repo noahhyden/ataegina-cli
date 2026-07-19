@@ -593,10 +593,35 @@ ate_port_proc_desc() {
 # file. Whether the injected value wins over a committed .env depends on your
 # framework's precedence (Next.js: real env > .env.local; python-dotenv: env wins
 # unless load_dotenv(override=True)).
+# True (0) when a launch we recorded for $1 (backend|frontend) is still ALIVE and is
+# OURS (recorded start-time still matches) — i.e. a server we already started is still
+# coming up. The start hooks use this to avoid DOUBLE-LAUNCHING inside the boot window:
+# before the port binds, a second `up` guarding only on the port would start a SECOND
+# server, orphan the first, and overwrite its pidfile so `down` could no longer reap
+# it. A dead (or pid-reused) recorded launch means no launch is in progress -> allow a
+# fresh start (crash recovery). ate_pid_starttime is defined below; resolved at call time.
+_ate_launch_in_progress() {
+  local label="$1"
+  local pidfile="${DEV_LOG_DIR:-}/$label.pid" startfile="${DEV_LOG_DIR:-}/$label.pidstart" lpid want got
+  [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ] || return 1
+  lpid="$(cat "$pidfile" 2>/dev/null || true)"
+  [ -n "$lpid" ] || return 1
+  kill -0 "$lpid" 2>/dev/null || return 1     # recorded launch pid is dead -> not in progress
+  # Require POSITIVE proof of ownership: a recorded start-time that STILL matches the
+  # live pid. Without it — a missing/empty start-time, or a mismatch (the pid was
+  # recycled by an unrelated process since) — do NOT claim a launch is in progress. An
+  # unverifiable record must never block a fresh `up` from starting the server.
+  want="$(cat "$startfile" 2>/dev/null || true)"
+  got="$(ate_pid_starttime "$lpid")"
+  if [ -n "$want" ] && [ -n "$got" ] && [ "$want" = "$got" ]; then return 0; fi
+  return 1
+}
+
 ate_start_backend() {
   [ -n "${BACKEND_CMD:-}" ] || { echo "ataegina: no backend configured (run: ataegina init)" >&2; return 1; }
   cd "$REPO_ROOT/${BACKEND_DIR:-.}" || return 1
   if ate_port_listening "$BACKEND_PORT"; then echo "backend  already up on :$BACKEND_PORT"; return 0; fi
+  if _ate_launch_in_progress backend; then echo "backend  already starting on :$BACKEND_PORT (pid $(cat "$DEV_LOG_DIR/backend.pid" 2>/dev/null))"; return 0; fi
   ( export PORT="$BACKEND_PORT" BACKEND_PORT FRONTEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
     # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
     # single export covers every assignment (and each value gets exported into
@@ -616,6 +641,7 @@ ate_start_frontend() {
   [ -n "${FRONTEND_CMD:-}" ] || { echo "ataegina: no frontend configured (run: ataegina init)" >&2; return 1; }
   cd "$REPO_ROOT/${FRONTEND_DIR:-.}" || return 1
   if ate_port_listening "$FRONTEND_PORT"; then echo "frontend already up on :$FRONTEND_PORT"; return 0; fi
+  if _ate_launch_in_progress frontend; then echo "frontend already starting on :$FRONTEND_PORT (pid $(cat "$DEV_LOG_DIR/frontend.pid" 2>/dev/null))"; return 0; fi
   ( export PORT="$FRONTEND_PORT" FRONTEND_PORT BACKEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
     # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
     # single export covers every assignment (and each value gets exported into
@@ -648,7 +674,13 @@ ate_start_frontend() {
 # start-time to the pid's current one catches that. `ps -o lstart=` is portable (Linux
 # and macOS/BSD); empty if unavailable, in which case the caller simply skips the check.
 ate_pid_starttime() {
-  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'
+  # A DEAD pid makes `ps -p` exit non-zero; under `set -o pipefail` that fails the
+  # whole pipeline, and at a `got="$(ate_pid_starttime ...)"` call site `set -e`
+  # would then abort the caller — which made `ate down` bail out (leaking the port
+  # holder) whenever the pid it recorded at launch had already exited by teardown
+  # time (a wrapper that forks a server and exits: uvicorn --reload, next dev, a
+  # daemonizer). Tolerate it: a missing/dead pid simply yields the empty string.
+  { ps -o lstart= -p "$1" 2>/dev/null || true; } | sed 's/^ *//;s/ *$//'
 }
 
 ate_pid_tree() {
@@ -746,7 +778,21 @@ ate_report_ready() {
     # (bad command, missing dep, crash, invalid port). Say so — and point at the
     # log — instead of the misleading "still starting", which left users staring at
     # a server that was never coming up.
+    #
+    # BUT a dead launch pid is not always failure: a launcher that FORKS the real
+    # server and exits (a daemonize-style start) leaves the recorded pid dead while
+    # the child is still binding. So don't declare failure the instant the pid is
+    # gone — give the port a brief grace to appear; only then is it truly dead.
     if [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then
+      local g=0
+      while [ "$g" -lt 15 ]; do
+        if ate_port_listening "$port"; then
+          log "  $label ready -> $url"
+          return 0
+        fi
+        sleep 0.2 2>/dev/null || sleep 1
+        g=$((g + 1))
+      done
       log "  $label FAILED to start (process exited) — see ${DEV_LOG_DIR:-?}/$label.log"
       return 0
     fi

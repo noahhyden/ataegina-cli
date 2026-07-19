@@ -30,7 +30,7 @@ teardown() { common_teardown; }
   # macOS resolves /tmp -> /private/tmp, so git's PRIMARY path is spelled differently
   # than the test's $repo, though it is the same file.)
   echo "$output" | grep -q "config: loaded .*/ataegina.config.sh"
-  ! echo "$output" | grep -q "config: loaded $wt/ataegina.config.sh"
+  refute_output_has "config: loaded $wt/ataegina.config.sh"
   # Config really took effect: DB name derives per-worktree from the inherited DB_NAME
   # (the worktree has no config and there is no global one, so this can only be the
   # primary's DB_NAME=shop) — the functional proof of inheritance.

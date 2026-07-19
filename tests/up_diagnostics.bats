@@ -24,7 +24,7 @@ teardown() {
   run ate up backend --scope backend
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "FAILED to start"
-  ! echo "$output" | grep -q "still starting"
+  refute_output_has "still starting"
 }
 
 @test "up says 'still starting' (not FAILED) for a slow but alive server" {
@@ -35,6 +35,6 @@ teardown() {
   run ate up backend --scope backend
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "still starting"
-  ! echo "$output" | grep -q "FAILED to start"
+  refute_output_has "FAILED to start"
   ate down backend >/dev/null 2>&1 || true
 }
