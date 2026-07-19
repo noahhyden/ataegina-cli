@@ -13,6 +13,10 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina open [frontend|backend]`.** Opens this worktree's derived URL in a
+  browser (default `frontend`). Opener resolution: `$BROWSER` (scriptable, may
+  carry its own flags), else `xdg-open` (Linux), else `open` (macOS); with none
+  available it prints the URL to open manually.
 - **`ataegina completion <bash|zsh>`.** Prints a self-contained shell completion
   script (subcommands plus one level of common arguments — mode words, `--scope`,
   `db` / `config` subcommands) for `ataegina` and the `ate` alias. Load it with

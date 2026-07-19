@@ -52,6 +52,7 @@ usage:
   ataegina logs [both|backend|frontend] [-n N] [--no-follow]   follow this tree's logs
   ataegina db [name|url|create|drop]    inspect/manage this tree's database
   ataegina ports                        show this tree's index, ports, urls
+  ataegina open [frontend|backend]      open this tree's url in a browser (default frontend)
   ataegina env [--no-export]            print this tree's derived env as eval-able
                                         shell (eval "$(ataegina env)")
   ataegina exec [--] CMD [args...]      run CMD with this tree's derived env
@@ -2416,6 +2417,28 @@ case "$CMD" in
     # parse e.g. `-mytool` as its own option and fail with "invalid option".
     exec -- "$@"
     ;;
+  open)
+    # Open this tree's derived URL in a browser. Default target is the frontend
+    # (the thing you look at); `backend` opens the API URL. Opener resolution:
+    # $BROWSER (scriptable; may carry its own flags, hence unquoted), else the
+    # platform default (xdg-open on Linux, open on macOS). With none, print the URL.
+    shift
+    open_target="${1:-frontend}"
+    case "$open_target" in
+      frontend) open_url="http://localhost:$FE_PORT" ;;
+      backend)  open_url="http://localhost:$BE_PORT" ;;
+      *) echo "ataegina open: unknown target '$open_target' (frontend|backend)" >&2; exit 2 ;;
+    esac
+    open_with="${BROWSER:-}"
+    [ -n "$open_with" ] || open_with="$(command -v xdg-open 2>/dev/null || command -v open 2>/dev/null || true)"
+    if [ -n "$open_with" ]; then
+      log "opening $open_url"
+      # shellcheck disable=SC2086
+      exec $open_with "$open_url"
+    fi
+    echo "ataegina: no browser opener found (set \$BROWSER); open this URL yourself:" >&2
+    echo "$open_url"
+    ;;
   list)
     printf '0\t%s (primary)\n' "$PRIMARY"
     if [ -f "$REGISTRY" ]; then
@@ -2515,7 +2538,7 @@ case "$CMD" in
     exit "$rc"
     ;;
   *)
-    echo "usage: ataegina [init|up|down|restart|logs|db|ports|env|exec|list|move|prune|doctor|config|update|completion] [both|backend|frontend]" >&2
+    echo "usage: ataegina [init|up|down|restart|logs|db|ports|open|env|exec|list|move|prune|doctor|config|update|completion] [both|backend|frontend]" >&2
     echo "       ataegina --help    for full usage" >&2
     exit 2
     ;;
