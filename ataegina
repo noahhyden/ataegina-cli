@@ -62,6 +62,7 @@ usage:
   ataegina doctor                       read-only diagnostics for this tree
   ataegina config [list|get|set|unset|path]   read/write ataegina.config.sh keys
   ataegina update                       self-update to the latest published release
+  ataegina completion [bash|zsh]        print a shell completion script to stdout
   ataegina --version | -v               print version and exit
   ataegina --help | -h                  print this usage and exit
 
@@ -2132,6 +2133,65 @@ cmd_env() {
   fi
 }
 
+# Print a shell completion script to stdout. Needs no worktree/config, so it runs
+# before the git-worktree requirement — you source it from an rc file anywhere.
+# The subcommand list mirrors the dispatch; keep it in sync when adding commands.
+cmd_completion() {
+  local shell="${1:-}"
+  local cmds="init up down restart logs db ports env exec list move prune doctor config update completion"
+  case "$shell" in
+    bash)
+      cat <<EOF
+# ataegina bash completion. Load it with:  source <(ataegina completion bash)
+_ataegina() {
+  local cur cmds
+  cur="\${COMP_WORDS[COMP_CWORD]}"
+  cmds="$cmds --version --help"
+  if [ "\$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=( \$(compgen -W "\$cmds" -- "\$cur") )
+    return
+  fi
+  case "\${COMP_WORDS[1]}" in
+    up|down|restart|logs) COMPREPLY=( \$(compgen -W "both backend frontend --scope --force -n --no-follow" -- "\$cur") ) ;;
+    db)      COMPREPLY=( \$(compgen -W "name url create drop" -- "\$cur") ) ;;
+    config)  COMPREPLY=( \$(compgen -W "list get set unset path --global" -- "\$cur") ) ;;
+    env)     COMPREPLY=( \$(compgen -W "--no-export" -- "\$cur") ) ;;
+    *)       COMPREPLY=() ;;
+  esac
+}
+complete -F _ataegina ataegina ate
+EOF
+      ;;
+    zsh)
+      cat <<EOF
+#compdef ataegina ate
+# ataegina zsh completion. Load it with:  source <(ataegina completion zsh)
+_ataegina() {
+  local -a cmds
+  cmds=($cmds)
+  if (( CURRENT == 2 )); then
+    compadd -- \$cmds
+    return
+  fi
+  case \$words[2] in
+    up|down|restart|logs) compadd -- both backend frontend --scope --force -n --no-follow ;;
+    db)      compadd -- name url create drop ;;
+    config)  compadd -- list get set unset path --global ;;
+    env)     compadd -- --no-export ;;
+  esac
+}
+_ataegina "\$@"
+EOF
+      ;;
+    '')
+      echo "ataegina completion: needs a shell (bash|zsh)" >&2
+      exit 2 ;;
+    *)
+      echo "ataegina completion: unknown shell '$shell' (bash|zsh)" >&2
+      exit 2 ;;
+  esac
+}
+
 # A bare `ataegina` (no args) prints usage and exits at the top-level case above,
 # so $1 is always a real subcommand by the time we get here.
 CMD="${1:-}"
@@ -2144,6 +2204,14 @@ if [ "$CMD" = "update" ]; then
   rc=0
   ate_update || rc=$?
   exit "$rc"
+fi
+
+# `completion` prints a static script; it needs no worktree, config, or port slot,
+# so it short-circuits here (like update) — you source it from an rc file anywhere.
+if [ "$CMD" = "completion" ]; then
+  shift
+  cmd_completion "$@"
+  exit 0
 fi
 
 # Anchor on the worktree the user is standing in, NOT where this script lives.
@@ -2447,7 +2515,7 @@ case "$CMD" in
     exit "$rc"
     ;;
   *)
-    echo "usage: ataegina [init|up|down|restart|logs|db|ports|env|exec|list|move|prune|doctor|config|update] [both|backend|frontend]" >&2
+    echo "usage: ataegina [init|up|down|restart|logs|db|ports|env|exec|list|move|prune|doctor|config|update|completion] [both|backend|frontend]" >&2
     echo "       ataegina --help    for full usage" >&2
     exit 2
     ;;
