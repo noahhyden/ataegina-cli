@@ -166,6 +166,29 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
+  # Coverage gate: ataegina's line coverage from the bats suite must stay >= 99%.
+  # Runs the HERMETIC tier only (no real servers, no docker) — fast (~3 min) and it
+  # already reaches 99%, because the real-process lines are covered hermetically via
+  # fake port tools + `true` backends. Measured per-file + unioned (scripts/
+  # coverage.sh): a single `bashcov -- bats tests/` under-counts, since bats spawns
+  # hundreds of bash processes whose concurrent SimpleCov writes race and drop data.
+  # ---------------------------------------------------------------------------
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats-core
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Install bashcov (ruby)
+        run: sudo gem install --no-document bashcov
+      - name: Configure a throwaway git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ate ci"
+      - name: ataegina line coverage must be >= 99%
+        run: scripts/coverage.sh 99
+
+  # ---------------------------------------------------------------------------
   # Windows / Git Bash: the README claims Git Bash (MSYS2) support, so actually
   # exercise it. GitHub's windows runner ships Git for Windows, whose bash is a
   # real MSYS2 bash; setting the job's default shell to `bash` runs every step
