@@ -13,6 +13,15 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina status [--json]`.** A read-only command answering "is my stack up,
+  and where?" without side effects — the query an agent runs before acting. Per
+  surface it reports `running` (a live server ataegina launched holds the port),
+  `foreign` (something ataegina did not launch holds it), `unknown` (held but
+  ownership unverifiable), or `stopped`. Starts/stops nothing, opens no database
+  connection, and exits 0 regardless of state (state is data, not failure);
+  `--json` folds `state`+`pid` into the shared slot shape. Also backfills the
+  in-script `--help` for `ports --json` and `up --wait`. See
+  `docs/design/agent-native.md`.
 - **`ataegina up --wait[=SECONDS]`.** Turns readiness into a contract: `up`
   blocks until every server it launched is accepting connections (up to
   `SECONDS`, default 60 or `ATE_UP_WAIT`) and exits `75` if any is not ready by

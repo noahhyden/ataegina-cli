@@ -45,13 +45,18 @@ ataegina - worktree-aware dev launcher (zero dependencies, pure bash)
 
 usage:
   ataegina init [options]               detect your stack, write ataegina.config.sh
-  ataegina up [both|backend|frontend] [--scope X]   start dev servers (default: both)
+  ataegina up [both|backend|frontend] [--scope X] [--wait[=SECONDS]]   start dev
+                                        servers (default: both); --wait blocks until
+                                        they are ready and exits 75 if not (see up options)
   ataegina down [both|backend|frontend] [--force]   stop dev servers (--force also
                                         reaps a slot held by a process ataegina did not start)
   ataegina restart [both|backend|frontend] [--scope X]   stop then start dev servers
   ataegina logs [both|backend|frontend] [-n N] [--no-follow]   follow this tree's logs
   ataegina db [name|url|create|drop]    inspect/manage this tree's database
-  ataegina ports                        show this tree's index, ports, urls
+  ataegina ports [--json]               show this tree's index, ports, urls
+                                        (--json: one machine-readable line)
+  ataegina status [--json]              read-only liveness for this tree: per-surface
+                                        running|foreign|unknown|stopped (--json too)
   ataegina open [frontend|backend]      open this tree's url in a browser (default frontend)
   ataegina env [--no-export]            print this tree's derived env as eval-able
                                         shell (eval "$(ataegina env)")
@@ -72,6 +77,10 @@ up options:
                        it, scope is auto-detected from the worktree's git diff
                        (or read from a `scope:` line in $ATE_TASK_FILE, if set).
                        Index 0 (the primary) is always both.
+  --wait[=SECONDS]     block until every server up launched is accepting connections
+                       (up to SECONDS, default 60 or $ATE_UP_WAIT), then exit 75 if
+                       any is not ready by the deadline. Lets a caller gate on
+                       `ataegina up --wait && <hit the server>`.
 
 init options:
   --yes, -y            accept all detected values (no prompts; same as CI)
@@ -105,6 +114,8 @@ env:
                        is resolved as: the current branch's upstream (e.g.
                        origin/dev), else the remote default (origin/HEAD), else the
                        first local of main/master/develop.
+  ATE_UP_WAIT=<secs>   default timeout for a bare `up --wait` (default 60); --wait=N
+                       overrides it per invocation
   ATE_UPDATE_CHECK=1   opt in to a throttled (<=1/24h) "newer version" notice at the
                        end of `up`. Default off. A single GET to the
                        public GitHub API; silent on any failure. No other telemetry.
@@ -2204,12 +2215,17 @@ cmd_env() {
 # starts nothing, touches no network. `db` is null when no database is configured;
 # `db.url` is null when DB_NAME is set but DB_URL_TEMPLATE is not. Reads the same
 # globals `up` exports (N, TREE, FE_PORT, BE_PORT, LOG_DIR, ATE_DB_NAME, _ate_db_url).
+# The `db` sub-object shared by every slot-shaped JSON emitter (ports/status/list):
+# {"name":..,"url":..}, or null when no database is configured, or url:null when
+# DB_NAME is set but DB_URL_TEMPLATE is not. Non-probing (never connects).
+emit_db_json() {
+  [ -n "${ATE_DB_NAME:-}" ] || { printf 'null'; return 0; }
+  local url_json='null'
+  [ -n "${_ate_db_url:-}" ] && url_json="$(json_str "$_ate_db_url")"
+  printf '{"name":%s,"url":%s}' "$(json_str "$ATE_DB_NAME")" "$url_json"
+}
+
 emit_slot_json() {
-  local db_json='null' url_json='null'
-  if [ -n "${ATE_DB_NAME:-}" ]; then
-    [ -n "${_ate_db_url:-}" ] && url_json="$(json_str "$_ate_db_url")"
-    db_json="$(printf '{"name":%s,"url":%s}' "$(json_str "$ATE_DB_NAME")" "$url_json")"
-  fi
   # index and ports are integers we control, so they are emitted bare (unquoted).
   printf '{"index":%s,"repo_root":%s,"frontend":{"port":%s,"url":%s},"backend":{"port":%s,"url":%s},"log_dir":%s,"db":%s}' \
     "$N" \
@@ -2217,7 +2233,64 @@ emit_slot_json() {
     "$FE_PORT" "$(json_str "http://localhost:$FE_PORT")" \
     "$BE_PORT" "$(json_str "http://localhost:$BE_PORT")" \
     "$(json_str "$LOG_DIR")" \
-    "$db_json"
+    "$(emit_db_json)"
+}
+
+# Classify one surface's liveness for `status`, setting _ATE_ST_STATE and
+# _ATE_ST_PID (bash-3.2 has no namerefs, so we use globals). Read-only: probes the
+# port, never touches the process. running = a live server we launched holds it;
+# foreign = something we did not launch holds it; unknown = held but ownership
+# unverifiable (often our own reparented daemon); stopped = nothing on the port.
+_ate_surface_state() {
+  local label="$1" port="$2"
+  _ATE_ST_PID=""
+  if ate_port_listening "$port"; then
+    _ATE_ST_PID="$(ate_port_pids "$port" | head -n1 || true)"
+    case "$(_ate_port_ownership "$label" "$port")" in
+      ours)    _ATE_ST_STATE=running ;;
+      foreign) _ATE_ST_STATE=foreign ;;
+      *)       _ATE_ST_STATE=unknown ;;
+    esac
+  else
+    _ATE_ST_STATE=stopped
+  fi
+}
+
+# `ataegina status [--json]` — READ-ONLY liveness for this worktree: the
+# side-effect-free "is my stack up, and where?" query an agent runs before acting.
+# Starts/stops nothing, opens no DB connection; exit 0 regardless of state (state
+# is data, not failure). --json prints the slot shape with state+pid folded into
+# the frontend/backend sub-objects (see docs/design/agent-native.md).
+cmd_status() {
+  local as_json=0 _arg
+  for _arg in "$@"; do
+    case "$_arg" in
+      --json) as_json=1 ;;
+      *) echo "ataegina status: unknown argument '$_arg' (--json)" >&2; exit 2 ;;
+    esac
+  done
+  local be_state be_pid fe_state fe_pid
+  _ate_surface_state backend  "$BE_PORT"; be_state="$_ATE_ST_STATE"; be_pid="$_ATE_ST_PID"
+  _ate_surface_state frontend "$FE_PORT"; fe_state="$_ATE_ST_STATE"; fe_pid="$_ATE_ST_PID"
+
+  if [ "$as_json" = 1 ]; then
+    # pid is a bare integer or null (never a quoted string).
+    local be_pid_json='null' fe_pid_json='null'
+    [ -n "$be_pid" ] && be_pid_json="$be_pid"
+    [ -n "$fe_pid" ] && fe_pid_json="$fe_pid"
+    printf '{"index":%s,"repo_root":%s,"frontend":{"port":%s,"url":%s,"state":%s,"pid":%s},"backend":{"port":%s,"url":%s,"state":%s,"pid":%s},"log_dir":%s,"db":%s}\n' \
+      "$N" "$(json_str "$TREE")" \
+      "$FE_PORT" "$(json_str "http://localhost:$FE_PORT")" "$(json_str "$fe_state")" "$fe_pid_json" \
+      "$BE_PORT" "$(json_str "http://localhost:$BE_PORT")" "$(json_str "$be_state")" "$be_pid_json" \
+      "$(json_str "$LOG_DIR")" "$(emit_db_json)"
+    return 0
+  fi
+
+  log "worktree #$N  $TREE"
+  printf '  frontend  :%-6s %s%s\n' "$FE_PORT" "$fe_state" "$([ -n "$fe_pid" ] && echo " (pid $fe_pid)")"
+  printf '  backend   :%-6s %s%s\n' "$BE_PORT" "$be_state" "$([ -n "$be_pid" ] && echo " (pid $be_pid)")"
+  [ -n "${ATE_DB_NAME:-}" ] && printf '  db          %s\n' "$ATE_DB_NAME"
+  return 0
 }
 
 # Print a shell completion script to stdout. Needs no worktree/config, so it runs
@@ -2225,7 +2298,7 @@ emit_slot_json() {
 # The subcommand list mirrors the dispatch; keep it in sync when adding commands.
 cmd_completion() {
   local shell="${1:-}"
-  local cmds="init up down restart logs db ports env exec list move prune doctor config update completion"
+  local cmds="init up down restart logs db ports status env exec list move prune doctor config update completion"
   case "$shell" in
     bash)
       cat <<EOF
@@ -2243,7 +2316,7 @@ _ataegina() {
     db)      COMPREPLY=( \$(compgen -W "name url create drop" -- "\$cur") ) ;;
     config)  COMPREPLY=( \$(compgen -W "list get set unset path --global" -- "\$cur") ) ;;
     env)     COMPREPLY=( \$(compgen -W "--no-export" -- "\$cur") ) ;;
-    ports)   COMPREPLY=( \$(compgen -W "--json" -- "\$cur") ) ;;
+    ports|status) COMPREPLY=( \$(compgen -W "--json" -- "\$cur") ) ;;
     *)       COMPREPLY=() ;;
   esac
 }
@@ -2266,7 +2339,7 @@ _ataegina() {
     db)      compadd -- name url create drop ;;
     config)  compadd -- list get set unset path --global ;;
     env)     compadd -- --no-export ;;
-    ports)   compadd -- --json ;;
+    ports|status) compadd -- --json ;;
   esac
 }
 _ataegina "\$@"
@@ -2504,6 +2577,10 @@ case "$CMD" in
       echo "  logs:     $LOG_DIR"
     fi
     ;;
+  status)
+    shift
+    cmd_status "$@"
+    ;;
   env)
     shift
     cmd_env "$@"
@@ -2647,7 +2724,7 @@ case "$CMD" in
     exit "$rc"
     ;;
   *)
-    echo "usage: ataegina [init|up|down|restart|logs|db|ports|open|env|exec|list|move|prune|doctor|config|update|completion] [both|backend|frontend]" >&2
+    echo "usage: ataegina [init|up|down|restart|logs|db|ports|status|open|env|exec|list|move|prune|doctor|config|update|completion] [both|backend|frontend]" >&2
     echo "       ataegina --help    for full usage" >&2
     exit 2
     ;;
