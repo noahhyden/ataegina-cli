@@ -43,5 +43,5 @@ teardown() { common_teardown; }
   cd "$repo"
   run ate down bogusmode
   [ "$status" -ne 0 ]
-  echo "$output" | grep -qi "unknown mode"
+  echo "$output" | grep -qi "unknown argument"
 }

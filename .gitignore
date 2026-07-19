@@ -13,6 +13,9 @@ node_modules/
 *.log
 logs/
 
+# Coverage reports (bashcov / SimpleCov)
+coverage/
+
 # The machine-local worktree-index registry, if you keep it in-repo
 worktree-index
 

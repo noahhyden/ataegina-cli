@@ -184,6 +184,28 @@ INSTALLED_VER="$(sed -n 's/^VERSION="\{0,1\}\([0-9][^"]*\)"\{0,1\}.*/\1/p' "$DES
 
 say "installed ataegina $INSTALLED_VER to $DEST"
 
+# --- man page (best-effort; never fatal) -------------------------------------
+
+# Install the man page alongside the script so `man ataegina` works. This is
+# strictly optional: any failure (page not published for this ref, no writable
+# man dir) is a soft note, never an error — the tool itself is already installed.
+# Man dir: ATE_MAN wins, then PREFIX/share/man, then ~/.local/share/man.
+if [ -n "${ATE_MAN:-}" ]; then
+  MAN_DIR="$ATE_MAN"
+elif [ -n "${PREFIX:-}" ]; then
+  MAN_DIR="$PREFIX/share/man/man1"
+else
+  MAN_DIR="$HOME/.local/share/man/man1"
+fi
+TMP_MAN="$TMP_DIR/ataegina.1"
+if fetch "$RAW_BASE/$REF/ataegina.1" 30 > "$TMP_MAN" 2>/dev/null && [ -s "$TMP_MAN" ]; then
+  if mkdir -p "$MAN_DIR" 2>/dev/null && cp "$TMP_MAN" "$MAN_DIR/ataegina.1" 2>/dev/null; then
+    say "installed man page to $MAN_DIR/ataegina.1"
+  else
+    say "note: could not write the man page to $MAN_DIR (skipped)"
+  fi
+fi
+
 # --- PATH hint (never edits rc files) ----------------------------------------
 
 # Is BIN_DIR on PATH? Compare it against each PATH element exactly.

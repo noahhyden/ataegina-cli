@@ -62,6 +62,40 @@ bare_repo() {
   echo "$output" | grep -q 'REACT_APP_API_URL=$BACKEND_URL'
 }
 
+@test "frontend: Nuxt detected -> nuxt dev on the slot port" {
+  repo="$(bare_repo "$ATE_TMP/fe-nuxt")"
+  mkdir -p "$repo/frontend"
+  printf '{"dependencies":{"nuxt":"3"}}\n' > "$repo/frontend/package.json"
+  cd "$repo"
+  run ate init --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'npx nuxt dev --port $FRONTEND_PORT'
+  echo "$output" | grep -q 'NUXT_PUBLIC_API_BASE_URL=$BACKEND_URL'
+}
+
+@test "frontend: Astro detected -> astro dev on the slot port" {
+  repo="$(bare_repo "$ATE_TMP/fe-astro")"
+  mkdir -p "$repo/frontend"
+  printf '{"dependencies":{"astro":"4"}}\n' > "$repo/frontend/package.json"
+  cd "$repo"
+  run ate init --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'npx astro dev --port $FRONTEND_PORT'
+  echo "$output" | grep -q 'PUBLIC_API_BASE_URL=$BACKEND_URL'
+}
+
+@test "frontend: SvelteKit detected -> vite dev (checked before bare vite)" {
+  repo="$(bare_repo "$ATE_TMP/fe-svelte")"
+  mkdir -p "$repo/frontend"
+  # SvelteKit ships vite as a dep too; detection must NOT fall through to vite.
+  printf '{"devDependencies":{"@sveltejs/kit":"2","vite":"5"}}\n' > "$repo/frontend/package.json"
+  cd "$repo"
+  run ate init --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'npx vite dev --port $FRONTEND_PORT'
+  echo "$output" | grep -q 'PUBLIC_API_BASE_URL=$BACKEND_URL'
+}
+
 @test "frontend: unknown framework is flagged, not guessed" {
   repo="$(bare_repo "$ATE_TMP/fe-unknown")"
   mkdir -p "$repo/frontend"
@@ -141,14 +175,36 @@ bare_repo() {
   echo "$output" | grep -q "BACKEND_CMD='npm run dev'"
 }
 
-@test "backend: Go (go.mod) is detected but left as a TODO (no reliable default)" {
+@test "backend: Go (go.mod) -> go run . with PORT env carrying the slot" {
   repo="$(bare_repo "$ATE_TMP/be-go")"
   mkdir -p "$repo/backend"
   printf 'module x\n\ngo 1.22\n' > "$repo/backend/go.mod"
   cd "$repo"
   run ate init --dry-run
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qi 'go (no reliable default'
+  echo "$output" | grep -q "BACKEND_CMD='go run .'"
+  echo "$output" | grep -q 'PORT=$BACKEND_PORT'
+}
+
+@test "backend: Rust (Cargo.toml) -> cargo run with PORT env" {
+  repo="$(bare_repo "$ATE_TMP/be-rust")"
+  mkdir -p "$repo/backend"
+  printf '[package]\nname="x"\nversion="0.1.0"\n' > "$repo/backend/Cargo.toml"
+  cd "$repo"
+  run ate init --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "BACKEND_CMD='cargo run'"
+  echo "$output" | grep -q 'PORT=$BACKEND_PORT'
+}
+
+@test "backend: PHP/Laravel (artisan) -> artisan serve on the slot port" {
+  repo="$(bare_repo "$ATE_TMP/be-php")"
+  mkdir -p "$repo/backend"
+  : > "$repo/backend/artisan"
+  cd "$repo"
+  run ate init --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'php artisan serve --host=0.0.0.0 --port=$BACKEND_PORT'
 }
 
 @test "full stack: Next + uv detected together" {

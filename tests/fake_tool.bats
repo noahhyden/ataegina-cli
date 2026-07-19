@@ -163,26 +163,43 @@ mock_repo() {
   [ "$(tree_count)" = 0 ]
 }
 
-@test "fake: up launches no duplicate when the slot port is already held (foreign holder)" {
+@test "fake: up REFUSES to claim a foreign-held slot as its own, and launches no duplicate" {
   local repo="$ATE_TMP/repo"
   mock_repo "$repo" "MOCK_TAG=$TAG"
   cd "$repo"
   # Pre-occupy the backend slot with an INDEPENDENT holder ataegina never launched
   # (a separate mock carrying a squatter sub-tag, so teardown's tag reap still
-  # catches it). ataegina cannot tell this from its own server — it only sees the
-  # port busy — but the defensible, lockable property is: it must NOT start a
-  # SECOND server on top of a held slot.
+  # catches it). ataegina now cross-checks the port holder against its own launch
+  # records: it must NOT imply success ("already up") for a process it never
+  # started, and must NOT launch a SECOND server on top of the held slot.
   MOCK_TAG="${TAG}-squat" MOCK_PORT="$BE_BASE" bash "$MOCK" "${TAG}-squat" >/dev/null 2>&1 &
   wait_listening "$BE_BASE"
   local before; before="$(tree_count)"     # the squatter tree (its tag contains $TAG)
 
   run ate up backend --scope backend
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qi "already up"    # (characterizes: foreign holder reads as up)
-  [ "$(tree_count)" -le "$before" ]         # no duplicate server launched on the slot
-  # NB: `ate down` here would kill the FOREIGN holder — a documented dev-possibility,
-  # deliberately NOT asserted so a future "leave foreign processes alone" fix is free
-  # to change it. Teardown reaps the squatter via its tag.
+  echo "$output" | grep -qi "did not start"     # names it as foreign, not "already up"
+  refute_output_has "already up"
+  [ "$(tree_count)" -le "$before" ]             # no duplicate server launched on the slot
+}
+
+@test "fake: down LEAVES a foreign slot holder alone, but --force reaps it" {
+  local repo="$ATE_TMP/repo"
+  mock_repo "$repo" "MOCK_TAG=$TAG"
+  cd "$repo"
+  # A squatter ataegina never launched holds the backend slot. Plain `down` must
+  # NOT kill it (it is not ataegina's process); `down --force` clears the slot.
+  MOCK_TAG="${TAG}-squat" MOCK_PORT="$BE_BASE" bash "$MOCK" "${TAG}-squat" >/dev/null 2>&1 &
+  wait_listening "$BE_BASE"
+
+  run ate down backend
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "did not start"     # explains why it left it alone
+  listening "$BE_BASE"                            # the foreign holder is still up
+
+  run ate down backend --force
+  [ "$status" -eq 0 ]
+  wait_free "$BE_BASE"                            # --force cleared the slot
 }
 
 @test "fake: re-up DURING a slow boot does not double-launch (boot-window idempotency)" {

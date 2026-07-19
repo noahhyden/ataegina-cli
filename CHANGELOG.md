@@ -11,6 +11,31 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-19
+
+### Added
+
+- **Foreign port-holder awareness in `up` and `down`.** A new ownership check
+  maps a slot's port to its holding pid(s) and classifies them against ataegina's
+  own start-time-verified launch record (`ours` / `foreign` / `unknown`). `up` no
+  longer claims a slot it never launched is "already up"/"ready" — it names the
+  foreign holder and declines to launch on top of it. `down` leaves a
+  positively-foreign holder alone (previously it killed whatever held the port);
+  `down --force` (or `ATE_DOWN_FORCE=1`) still clears the slot on demand.
+  Ambiguous holders — unmappable pids, or a daemonize-style server of ours that
+  reparented to init — stay `unknown` and behave exactly as before, so nothing we
+  own is spared teardown or falsely accused.
+- **More stacks detected by `init`.** Backends: Go now emits a runnable
+  `go run .` default (with a `PORT` env) instead of a bare TODO; Rust
+  (`Cargo.toml` → `cargo run`) and PHP/Laravel (`artisan` → `artisan serve`)
+  added. Frontends: Nuxt, Astro, and SvelteKit added (matched before the
+  bare-vite fallback they build on).
+- **Man page.** Ship `ataegina.1` (`man ataegina`); `install.sh` installs it
+  best-effort alongside the script.
+- **Automated release + Git Bash CI.** A `release.yml` workflow publishes the
+  GitHub Release (and optionally bumps the Homebrew tap) on a version tag, and a
+  Windows runner now exercises the Git Bash support the README claims.
+
 ## [0.6.0] - 2026-07-18
 
 ### Fixed
