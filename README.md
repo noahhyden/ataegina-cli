@@ -201,7 +201,7 @@ always).
 | Command | What it does |
 |---|---|
 | `ataegina init [options]` | Detect your stack and write a declarative `ataegina.config.sh` (interactive by default; `--yes`, `--dry-run`, `--force`, `--frontend-dir`, `--backend-dir`) |
-| `ataegina up [both\|backend\|frontend] [--scope X]` | Start dev servers (default `both`) on this tree's port slot; `--scope frontend\|backend\|both\|none` forces the start scope (see "Scope-aware startup"). If the slot is already held by a process ataegina didn't launch, it says so and declines rather than implying success |
+| `ataegina up [both\|backend\|frontend] [--scope X] [--wait[=SECONDS]]` | Start dev servers (default `both`) on this tree's port slot; `--scope frontend\|backend\|both\|none` forces the start scope (see "Scope-aware startup"). `--wait` blocks until every server it launched is accepting connections (up to `SECONDS`, default 60 or `ATE_UP_WAIT`) and exits `75` if any isn't ready by then — so an agent can `ataegina up --wait && curl "$BACKEND_URL/health"` with no poll loop. If the slot is already held by a process ataegina didn't launch, it says so and declines rather than implying success |
 | `ataegina down [both\|backend\|frontend] [--force]` | Stop them (kills by port, and by the pid it launched so nothing orphans). Leaves a slot held by a process ataegina didn't start alone; `--force` (or `ATE_DOWN_FORCE=1`) reaps it anyway |
 | `ataegina restart [both\|backend\|frontend] [--scope X]` | Bounce this tree's servers: a `down` then an `up`. Args forward to `up` (which resolves the scope); the stop phase mirrors the mode word, so `restart backend` bounces only the backend |
 | `ataegina logs [both\|backend\|frontend] [-n N] [--no-follow]` | Follow this tree's server logs live (scoped to the current worktree) |
@@ -228,6 +228,7 @@ Flag / env:
 | `ATE_CONFIG=<path>` | Use an explicit config file path |
 | `ATE_REGISTRY_DIR` | Override the registry root (per-repo files go under its `repos/`) |
 | `ATE_REGISTRY` | Pin one explicit registry file, shared across repos (overrides the per-repo default) |
+| `ATE_UP_WAIT=<seconds>` | Default timeout for a bare `up --wait` (default 60); `--wait=N` overrides it per invocation |
 
 **Configuration.** The config lives in `ataegina.config.sh`, but you rarely open
 it: `ataegina init` writes it for you, and `ataegina config set/get/list` reads

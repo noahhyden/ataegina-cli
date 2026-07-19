@@ -86,11 +86,21 @@ Detect the frontend and backend and write
 .IR ataegina.config.sh .
 Interactive by default; each detected value is offered as the prompt default.
 .TP
-.B up \fR[both|backend|frontend] [--scope X]
+.B up \fR[both|backend|frontend] [--scope X] [--wait[=SECONDS]]
 Start dev servers for this worktree (default: both). Ensures the per-worktree
 database exists first (when configured). Reports each server as ready, still
 starting, or failed. If the slot port is held by a process ataegina did not
-start, it says so and does not launch on top of it.
+start, it says so and does not launch on top of it. With
+.B --wait
+block until every server it launched is accepting connections (up to
+.I SECONDS
+seconds, default 60 or
+.BR ATE_UP_WAIT )
+and exit
+.B 75
+if any is not ready by the deadline, so a caller can gate on
+.BR "ataegina up --wait && \fR<use the server>" .
+Exit 0 when everything launched is ready (or nothing was launched).
 .TP
 .B down \fR[both|backend|frontend] [--force]
 Stop this worktree's servers, reaping the whole process tree (workers and
@@ -264,6 +274,13 @@ reap a slot held by a process ataegina did not start (same as
 Force the port-probe backend:
 .IR lsof | ss | fuser | proc | none
 (auto-detected otherwise).
+.TP
+.B ATE_UP_WAIT
+Default timeout in seconds for a bare
+.B "up --wait"
+(default 60).
+.B --wait=SECONDS
+overrides it for one invocation.
 .TP
 .B ATE_UPDATE_CHECK=1
 Opt in to a throttled (at most once per 24h) "newer version" notice at the end of

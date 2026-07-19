@@ -13,6 +13,13 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina up --wait[=SECONDS]`.** Turns readiness into a contract: `up`
+  blocks until every server it launched is accepting connections (up to
+  `SECONDS`, default 60 or `ATE_UP_WAIT`) and exits `75` if any is not ready by
+  the deadline, so an agent can gate on `ataegina up --wait && <hit the server>`
+  with no hand-rolled poll loop and no race against a not-yet-bound port. Without
+  the flag, `up` is unchanged (fire-and-forget best-effort report, always exit 0).
+  `restart --wait` propagates the same exit code. See `docs/design/agent-native.md`.
 - **`ataegina ports --json`.** Prints this worktree's derived slot as a single
   line of JSON (index, repo_root, frontend/backend port+url, log_dir, and the
   per-worktree database name+url when configured) instead of the human table, so
