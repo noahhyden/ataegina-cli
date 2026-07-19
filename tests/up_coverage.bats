@@ -77,3 +77,35 @@ teardown() { common_teardown; }
   [ "$status" -ne 0 ]
   echo "$output" | grep -qi "not inside a git worktree"
 }
+
+@test "up frontend borrows the shared backend when it is UP (fake port tool)" {
+  local bin="$ATE_TMP/bin"; mkdir -p "$bin"
+  cat > "$bin/ss" <<'EOF'
+#!/usr/bin/env bash
+want="${FAKE_PORT:-0}"; q=""
+for a in "$@"; do case "$a" in -*) : ;; *) q="$q $a" ;; esac; done
+case "$q" in *"sport = :$want"*) echo "LISTEN 0 128 127.0.0.1:$want 0.0.0.0:*" ;; *) exit 0 ;; esac
+EOF
+  chmod +x "$bin/ss"
+  local wt; wt="$(add_worktree "$REPO" wtShared)"
+  cp "$REPO/ataegina.config.sh" "$wt/ataegina.config.sh"
+  cd "$wt"
+  # Report the BASE backend port (54100) as listening -> the shared-backend-UP path.
+  run env PATH="$bin:$PATH" ATE_PORT_TOOL=ss FAKE_PORT=54100 \
+    ATE_REGISTRY_DIR="$ATE_TMP/registry" LOG_DIR_BASE="$ATE_TMP/logs/ate-wt" \
+    bash "$ATE_SCRIPT" up frontend --scope frontend
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "backend shared from :54100"
+}
+
+@test "down both dispatches to both sides" {
+  cd "$REPO"
+  run ate down both
+  echo "$output" | grep -qiE "nothing to stop|stopped on"
+}
+
+@test "down frontend dispatches to the frontend side" {
+  cd "$REPO"
+  run ate down frontend
+  echo "$output" | grep -qiE "nothing to stop|stopped on"
+}

@@ -55,9 +55,11 @@ keep CI network-free. Each docker test skips cleanly when docker is unavailable.
 To run just one tier's new file, e.g.: `ATE_TEST_INTEGRATION=1 bats tests/flagship_e2e.bats`.
 
 **Coverage.** `ataegina`'s line coverage is gated at **≥ 99%** in CI. Measure it
-locally with `scripts/coverage.sh` (needs `gem install bashcov`). It runs bashcov
-**per test file** and unions the hits — a single `bashcov -- bats tests/` under-counts
-because bats spawns hundreds of bash processes whose concurrent SimpleCov writes race.
+locally with `scripts/coverage.sh` (needs `gem install bashcov`); it runs the hermetic
+tier only and takes ~3 min. It runs bashcov **per test file** and unions the hits — a
+single `bashcov -- bats tests/` under-counts because bats spawns hundreds of bash
+processes whose concurrent SimpleCov writes race. Real-process lines are covered
+hermetically (fake port tools + `true` backends), so the gate needs no real servers.
 The handful of never-covered lines are non-executable (awk-program bodies inside
 single-quoted strings, empty `case` arms) — not missing tests.
 

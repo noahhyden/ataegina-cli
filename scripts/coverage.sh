@@ -6,8 +6,11 @@
 # concurrent writes — the aggregate under-counts badly (races drop data). Running
 # bashcov ONE FILE at a time is reliable; we union the per-file line hits in Python.
 #
-# Requires: ruby + bashcov (gem), bats, python3. Runs the full (integration) suite
-# so the real up/down/db/readiness paths are exercised. Usage:
+# Requires: ruby + bashcov (gem), bats, python3. Runs the HERMETIC (unit) suite by
+# default — fast, no real servers — which already reaches the gate: the real-process
+# lines are covered hermetically via fake port tools + `true` backends. Set
+# ATE_TEST_INTEGRATION=1 to additionally trace the real-server tier (slower; the
+# number is unchanged). Usage:
 #   scripts/coverage.sh [MIN_PERCENT]     (default 99)
 set -u
 cd "$(dirname "$0")/.."
@@ -16,7 +19,8 @@ command -v bashcov >/dev/null 2>&1 || { echo "coverage: bashcov not found (gem i
 command -v bats    >/dev/null 2>&1 || { echo "coverage: bats not found"; exit 127; }
 command -v python3 >/dev/null 2>&1 || { echo "coverage: python3 not found"; exit 127; }
 
-export ATE_TEST_INTEGRATION="${ATE_TEST_INTEGRATION:-1}"
+# Default to the hermetic tier (integration tests skip); opt in with ATE_TEST_INTEGRATION=1.
+export ATE_TEST_INTEGRATION="${ATE_TEST_INTEGRATION:-0}"
 UNION="$(mktemp)"
 python3 -c 'import json,sys;json.dump({},open(sys.argv[1],"w"))' "$UNION"
 

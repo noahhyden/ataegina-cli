@@ -167,10 +167,11 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Coverage gate: ataegina's line coverage from the bats suite must stay >= 99%.
-  # Measured per-file + unioned (scripts/coverage.sh) because a single
-  # `bashcov -- bats tests/` under-counts — bats spawns hundreds of bash processes
-  # whose concurrent SimpleCov writes race and drop data. Runs the integration tier
-  # (real python/node/go/ruby dev servers, preinstalled on the runner); no docker.
+  # Runs the HERMETIC tier only (no real servers, no docker) — fast (~3 min) and it
+  # already reaches 99%, because the real-process lines are covered hermetically via
+  # fake port tools + `true` backends. Measured per-file + unioned (scripts/
+  # coverage.sh): a single `bashcov -- bats tests/` under-counts, since bats spawns
+  # hundreds of bash processes whose concurrent SimpleCov writes race and drop data.
   # ---------------------------------------------------------------------------
   coverage:
     runs-on: ubuntu-latest
@@ -185,6 +186,4 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "ate ci"
       - name: ataegina line coverage must be >= 99%
-        env:
-          ATE_TEST_INTEGRATION: "1"
         run: scripts/coverage.sh 99
