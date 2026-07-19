@@ -86,6 +86,29 @@ mock_repo() {
   wait_free "$BE_BASE"
 }
 
+# --- doctor reflects live state --------------------------------------------
+
+@test "fake: doctor reports the backend slot in use while up, and free after down" {
+  local repo="$ATE_TMP/repo"
+  mock_repo "$repo" "MOCK_TAG=$TAG"
+  cd "$repo"
+
+  run ate up backend --scope backend
+  [ "$status" -eq 0 ]
+  wait_listening "$BE_BASE"
+
+  run ate doctor
+  [ "$status" -eq 0 ]                                    # warns don't fail doctor
+  echo "$output" | grep -qi "backend port :$BE_BASE in use"
+
+  ate down backend
+  wait_free "$BE_BASE"
+
+  run ate doctor
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "backend port :$BE_BASE is free"
+}
+
 # --- both sides at once -----------------------------------------------------
 
 @test "fake: up both binds frontend + backend on distinct ports; down both reaps both" {
