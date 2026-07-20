@@ -13,6 +13,13 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina up --json`.** Prints one machine-readable slot object on stdout —
+  the `ports --json` shape plus `started` (the surfaces this invocation launched)
+  and a per-surface `ready` boolean — while routing all human log/hook output to
+  stderr, so an agent learns the slot and readiness in a single call with no
+  scraping. Combine with `--wait` for a truthful `ready` (a plain `--json` does a
+  single immediate check); the exit code still follows `--wait` (0, or 75 on a
+  not-ready deadline). `restart --json` works too. See `docs/design/agent-native.md`.
 - **`ataegina status [--json]`.** A read-only command answering "is my stack up,
   and where?" without side effects — the query an agent runs before acting. Per
   surface it reports `running` (a live server ataegina launched holds the port),

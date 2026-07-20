@@ -86,7 +86,7 @@ Detect the frontend and backend and write
 .IR ataegina.config.sh .
 Interactive by default; each detected value is offered as the prompt default.
 .TP
-.B up \fR[both|backend|frontend] [--scope X] [--wait[=SECONDS]]
+.B up \fR[both|backend|frontend] [--scope X] [--wait[=SECONDS]] [--json]
 Start dev servers for this worktree (default: both). Ensures the per-worktree
 database exists first (when configured). Reports each server as ready, still
 starting, or failed. If the slot port is held by a process ataegina did not
@@ -100,7 +100,18 @@ and exit
 .B 75
 if any is not ready by the deadline, so a caller can gate on
 .BR "ataegina up --wait && \fR<use the server>" .
-Exit 0 when everything launched is ready (or nothing was launched).
+Exit 0 when everything launched is ready (or nothing was launched). With
+.B --json
+print one machine-readable slot object on stdout (the
+.B ports
+shape plus
+.I started
+and a per-surface
+.IR ready )
+and send all human output to stderr; combine with
+.B --wait
+for a truthful
+.IR ready .
 .TP
 .B down \fR[both|backend|frontend] [--force]
 Stop this worktree's servers, reaping the whole process tree (workers and
