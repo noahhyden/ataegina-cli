@@ -11,6 +11,17 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-20
+
+First stable release. ataegina is now a complete **agent-native** worktree dev
+launcher: on top of the per-worktree ports/process/database isolation, every
+read-only command speaks JSON (`ports`/`status`/`list`/`doctor --json`), `up`
+can block on readiness and report it (`--wait`, `--json`), and the workflow
+commands added since 0.7.0 (`env`, `exec`, `restart`, `open`, `completion`) round
+out driving a fleet of parallel agents from scripts. The single-file, zero-
+dependency, no-daemon design is unchanged; all commands remain backward
+compatible (the JSON output is strictly opt-in via `--json`).
+
 ### Added
 
 - **`ataegina doctor --json`.** Emits `{status, summary:{ok,warn,fail},
