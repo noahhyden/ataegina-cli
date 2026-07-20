@@ -13,6 +13,12 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina doctor --json`.** Emits `{status, summary:{ok,warn,fail},
+  checks:[{level,message}]}` on stdout (human `[ok]`/`[warn]`/`[fail]` lines and
+  urls/hook chatter routed to stderr), so an agent doing health-based remediation
+  sees *which* check failed rather than only the exit code. `status` mirrors the
+  exit code; a config-defined `ate_doctor` hook that calls the check helpers is
+  captured in the report, and a hook calling `dfail` flips `status` to `fail`.
 - **`ataegina list --json`.** Emits the registry as a JSON array — the slot shape
   per worktree (primary first) plus `stale` (its directory is gone) and `live` (a
   coarse best-effort "a derived port is listening") — the fleet view a supervising
