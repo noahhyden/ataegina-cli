@@ -34,6 +34,11 @@ assert_valid_json() {
 # Register a worktree (assign its index) by running a read command from inside it.
 register() { ( cd "$1" && ate ports >/dev/null ); }
 
+# The path ataegina records/reports for a tree is git's resolved toplevel, which on
+# macOS differs from the raw mktemp path ($TMPDIR is /var -> /private/var, a symlink
+# git resolves). Compare JSON repo_root / human paths against THIS, never the raw dir.
+resolved() { ( cd "$1" && git rev-parse --show-toplevel ); }
+
 make_fake_ss() {
   cat > "$BIN/ss" <<'EOF'
 #!/usr/bin/env bash
@@ -50,7 +55,7 @@ EOF
   [ "$status" -eq 0 ]
   assert_valid_json "$output"
   echo "$output" | grep -q '^\[{"index":0,'
-  echo "$output" | grep -q '"repo_root":"'"$REPO"'"'
+  echo "$output" | grep -q '"repo_root":"'"$(resolved "$REPO")"'"'
   echo "$output" | grep -q '"stale":false,"live":false}'
   echo "$output" | grep -q '"db":null'
 }
@@ -59,12 +64,13 @@ EOF
   local a b
   a="$(add_worktree "$REPO" wtA)"; register "$a"
   b="$(add_worktree "$REPO" wtB)"; register "$b"
+  local ra rb; ra="$(resolved "$a")"; rb="$(resolved "$b")"
   cd "$REPO"
   run ate list --json
   [ "$status" -eq 0 ]
   assert_valid_json "$output"
-  echo "$output" | grep -q '"index":1,"repo_root":"'"$a"'","frontend":{"port":53101,'
-  echo "$output" | grep -q '"index":2,"repo_root":"'"$b"'","frontend":{"port":53102,'
+  echo "$output" | grep -q '"index":1,"repo_root":"'"$ra"'","frontend":{"port":53101,'
+  echo "$output" | grep -q '"index":2,"repo_root":"'"$rb"'","frontend":{"port":53102,'
   # Parseable as a 3-element array (primary + 2).
   if command -v python3 >/dev/null 2>&1; then
     n="$(printf '%s' "$output" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
@@ -75,12 +81,13 @@ EOF
 @test "list --json marks an entry stale when its worktree directory is gone" {
   local a
   a="$(add_worktree "$REPO" wtA)"; register "$a"
+  local ra; ra="$(resolved "$a")"    # resolve BEFORE removing the dir
   rm -rf "$a"          # registry still holds the entry; prune not run
   cd "$REPO"
   run ate list --json
   [ "$status" -eq 0 ]
   assert_valid_json "$output"
-  echo "$output" | grep -q '"index":1,"repo_root":"'"$a"'".*"stale":true,"live":false}'
+  echo "$output" | grep -q '"index":1,"repo_root":"'"$ra"'".*"stale":true,"live":false}'
 }
 
 @test "list --json marks an entry live when a derived port is listening" {
@@ -123,11 +130,12 @@ EOF
 @test "list (no flag) still prints the human table with the primary" {
   local a
   a="$(add_worktree "$REPO" wtA)"; register "$a"
+  local ra; ra="$(resolved "$a")"
   cd "$REPO"
   run ate list
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "(primary)"
-  echo "$output" | grep -qE "^1	$a"
+  echo "$output" | grep -qF "	$ra"
 }
 
 @test "list (no flag) flags a stale entry" {
