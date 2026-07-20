@@ -29,6 +29,7 @@ Named after the Lusitanian goddess of rebirth.
 
 - [The problem](#the-problem)
 - [What it ships](#what-it-ships)
+- [Agent-native](#agent-native)
 - [Install](#install)
 - [Quickstart](#quickstart)
 - [Platforms](#platforms)
@@ -74,6 +75,25 @@ index N and derives everything collision-free from it:
 `ataegina init` detects your stack and writes the config; from then on
 `ataegina up` brings this tree's whole stack up on its own slot. You keep your
 own start commands — ataegina does the deconfliction and the bookkeeping.
+
+## Agent-native
+
+Every read command speaks JSON, and `up` can block until the servers actually
+answer — so a supervising agent gates on real state, not a poll loop.
+
+![an agent claiming a slot with `ataegina up --wait --json`, then reading the fleet as JSON](docs/agents.gif)
+
+- **`ataegina up --wait --json`** — claim the slot, block until every server it
+  launched is accepting connections, then emit one machine-readable slot object
+  (`ports` shape plus `started` and per-surface `ready`). Exit `75` if anything
+  isn't ready by the deadline, so `ataegina up --wait && curl "$BACKEND_URL"`
+  needs no sleep loop.
+- **`ataegina status --json`** / **`ports --json`** — the same slot shape for any
+  worktree, with live `state` + `pid`. The query an agent runs before acting.
+- **`ataegina list --json`** — the whole fleet in one array, each entry tagged
+  `stale` / `live`. The view a supervising agent uses to see all its workers.
+- **`ataegina doctor --json`** — structured diagnostics (`{status, summary,
+  checks[]}`) with a nonzero exit on failure, so it doubles as a CI gate.
 
 ## Install
 
