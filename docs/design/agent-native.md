@@ -90,6 +90,25 @@ directory is gone) and, when port tooling can see it, a coarse `"live": bool`
 agent uses to see all its workers at once. Human output unchanged without the
 flag.
 
+## 6. `doctor --json`
+
+`doctor` already gates via its exit code (nonzero on a hard `[fail]`), but an
+agent doing health-based remediation wants to know *which* check failed, not
+just pass/fail. `doctor --json` emits a structured report on stdout (all the
+human `[ok]`/`[warn]`/`[fail]` lines and the urls/hook chatter go to stderr):
+
+```json
+{ "status": "pass",
+  "summary": { "ok": 6, "warn": 2, "fail": 0 },
+  "checks": [ { "level": "ok", "message": "worktree: index #0 …" }, … ] }
+```
+
+`status` mirrors the exit code (`fail` iff a hard `[fail]` occurred, else
+`pass`). The check helpers (`dok`/`dwarn`/`dfail`) record each row, so a
+config-defined `ate_doctor` hook that calls them is captured too — and a hook
+that calls `dfail` flips `status` to `fail` and the exit code to nonzero. Still
+read-only; still a CI/agent gate.
+
 ## Non-goals
 
 No MCP server (a daemon + runtime would contradict the single-file, no-daemon

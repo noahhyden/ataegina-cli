@@ -214,7 +214,7 @@ always).
 | `ataegina move N` | Relocate this worktree to index `N` (and its derived port slot); stops the old slot's servers, refuses an index another live worktree holds, and rejects index 0 |
 | `ataegina list [--json]` | List every registered worktree (flags stale entries). `--json` emits a JSON array of the slot shape per worktree (primary first) plus `stale` (its directory is gone) and `live` (coarse best-effort: a derived port is listening) — the fleet view a supervising agent uses to see all its workers at once |
 | `ataegina prune` | Drop registry entries whose worktree directory is gone |
-| `ataegina doctor` | Run read-only diagnostics for this tree (never mutates; nonzero exit on a hard failure, so it works as a CI gate) |
+| `ataegina doctor [--json]` | Run read-only diagnostics for this tree (never mutates; nonzero exit on a hard failure, so it works as a CI gate). `--json` emits `{status, summary:{ok,warn,fail}, checks:[{level,message}]}` on stdout (human lines to stderr) so an agent can see *which* check failed, not just the exit code |
 | `ataegina config <get\|set\|list\|unset\|path> [...]` | Read or change config values without opening the file (see "Configuration") |
 | `ataegina update` | Self-replace with the latest published release, checksum-verified, with a `.bak` rollback (see "Updating") |
 | `ataegina completion <bash\|zsh>` | Print a shell completion script (subcommands + common args) to stdout. Load it with `source <(ataegina completion bash)` (or `zsh`); needs no worktree |

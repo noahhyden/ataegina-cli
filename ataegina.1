@@ -225,9 +225,17 @@ permanently taken. The primary (index 0) cannot be moved.
 Drop registry entries whose worktree directory no longer exists, freeing those
 indices for reuse.
 .TP
-.B doctor
+.B doctor \fR[--json]
 Read-only diagnostics for this worktree: resolved index, ports, port-probe tool,
-config source, start hooks, and database status.
+config source, start hooks, and database status. Exits nonzero on a hard failure
+(so it works as a CI gate). With
+.B --json
+emit
+.I {status, summary:{ok,warn,fail}, checks:[{level,message}]}
+on stdout (human lines to stderr), so an agent sees which check failed, not just
+the exit code. A config-defined
+.B ate_doctor
+hook that calls the check helpers is captured too.
 .TP
 .B config \fR[list|get|set|unset|path]
 Read or write scalar keys in

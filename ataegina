@@ -67,7 +67,8 @@ usage:
                                         JSON array with per-worktree stale/live)
   ataegina move N                       relocate this worktree to index N (new ports)
   ataegina prune                        drop registry entries whose tree is gone
-  ataegina doctor                       read-only diagnostics for this tree
+  ataegina doctor [--json]              read-only diagnostics for this tree (--json:
+                                        {status, summary, checks[]}; exit nonzero on fail)
   ataegina config [list|get|set|unset|path]   read/write ataegina.config.sh keys
   ataegina update                       self-update to the latest published release
   ataegina completion [bash|zsh]        print a shell completion script to stdout
@@ -1786,12 +1787,45 @@ cmd_config() {
 # and the loaded config. Exit code is nonzero only if a hard [fail] occurred
 # (e.g. not inside a git worktree); plain [warn]s keep the exit code at 0, so
 # doctor is usable as a CI gate.
+# When DOCTOR_JSON=1 every check is also recorded as a JSON object so `doctor
+# --json` can emit a structured report. The human [ok]/[warn]/[fail] lines still
+# print (they go to stderr under --json via the fd swap in cmd_doctor), so the
+# check helpers stay simple and a config-defined ate_doctor that calls dok/dwarn/
+# dfail is captured too. _DOCTOR_CHECKS is a JSON array body built incrementally.
 DOCTOR_FAILED=0
-dok()   { printf '[ok]   %s\n' "$*"; }
-dwarn() { printf '[warn] %s\n' "$*"; }
-dfail() { printf '[fail] %s\n' "$*"; DOCTOR_FAILED=1; }
+DOCTOR_JSON=0
+_DOCTOR_CHECKS=""
+_DOCTOR_OK=0
+_DOCTOR_WARN=0
+_DOCTOR_FAIL=0
+_doctor_record() {
+  [ "$DOCTOR_JSON" = 1 ] || return 0
+  local level="$1"; shift
+  case "$level" in
+    ok)   _DOCTOR_OK=$((_DOCTOR_OK + 1)) ;;
+    warn) _DOCTOR_WARN=$((_DOCTOR_WARN + 1)) ;;
+    fail) _DOCTOR_FAIL=$((_DOCTOR_FAIL + 1)) ;;
+  esac
+  local sepc=""; [ -n "$_DOCTOR_CHECKS" ] && sepc=","
+  _DOCTOR_CHECKS="$_DOCTOR_CHECKS$sepc{\"level\":\"$level\",\"message\":$(json_str "$*")}"
+}
+dok()   { printf '[ok]   %s\n' "$*"; _doctor_record ok   "$*"; }
+dwarn() { printf '[warn] %s\n' "$*"; _doctor_record warn "$*"; }
+dfail() { printf '[fail] %s\n' "$*"; DOCTOR_FAILED=1; _doctor_record fail "$*"; }
 
 cmd_doctor() {
+  local _arg
+  for _arg in "$@"; do
+    case "$_arg" in
+      --json) DOCTOR_JSON=1 ;;
+      *) echo "ataegina doctor: unknown argument '$_arg' (--json)" >&2; exit 2 ;;
+    esac
+  done
+  # Under --json the human [ok]/[warn]/… lines and the urls/hook chatter go to
+  # stderr (fd 3 holds the real stdout), so the JSON object emitted at the end is
+  # the only thing on stdout. The check helpers still record structured rows.
+  [ "$DOCTOR_JSON" = 1 ] && exec 3>&1 1>&2
+
   log "ataegina doctor  (read-only)"
 
   # 1. Launcher on PATH. Resolve under the INVOKED name (the basename of $0, e.g.
@@ -1934,10 +1968,20 @@ cmd_doctor() {
   echo "  logs:     $LOG_DIR"
 
   # 8. Extension hook: run the user's ate_doctor last, if defined, so a stack can
-  #    add its own checks (CORS, sidecars, ...). It inherits the exported env.
+  #    add its own checks (CORS, sidecars, ...). It inherits the exported env. A
+  #    hook that calls dok/dwarn/dfail is captured in the JSON report too.
   if config_defines_hook ate_doctor; then
     log "ate_doctor (config-defined checks)"
     ate_doctor || true
+  fi
+
+  if [ "$DOCTOR_JSON" = 1 ]; then
+    # Restore the real stdout and emit the structured report there. `status` is the
+    # bottom line agents gate on; it mirrors the exit code (fail iff a hard [fail]).
+    exec 1>&3 3>&-
+    local _st=pass; [ "$DOCTOR_FAILED" = 1 ] && _st=fail
+    printf '{"status":"%s","summary":{"ok":%s,"warn":%s,"fail":%s},"checks":[%s]}\n' \
+      "$_st" "$_DOCTOR_OK" "$_DOCTOR_WARN" "$_DOCTOR_FAIL" "$_DOCTOR_CHECKS"
   fi
 
   return "$DOCTOR_FAILED"
@@ -2434,7 +2478,7 @@ _ataegina() {
     db)      COMPREPLY=( \$(compgen -W "name url create drop" -- "\$cur") ) ;;
     config)  COMPREPLY=( \$(compgen -W "list get set unset path --global" -- "\$cur") ) ;;
     env)     COMPREPLY=( \$(compgen -W "--no-export" -- "\$cur") ) ;;
-    ports|status|list) COMPREPLY=( \$(compgen -W "--json" -- "\$cur") ) ;;
+    ports|status|list|doctor) COMPREPLY=( \$(compgen -W "--json" -- "\$cur") ) ;;
     *)       COMPREPLY=() ;;
   esac
 }
@@ -2457,7 +2501,7 @@ _ataegina() {
     db)      compadd -- name url create drop ;;
     config)  compadd -- list get set unset path --global ;;
     env)     compadd -- --no-export ;;
-    ports|status|list) compadd -- --json ;;
+    ports|status|list|doctor) compadd -- --json ;;
   esac
 }
 _ataegina "\$@"
@@ -2843,8 +2887,9 @@ case "$CMD" in
   doctor)
     # cmd_doctor may return nonzero on a hard [fail]; guard against set -e so we
     # exit with its code rather than aborting mid-function.
+    shift
     rc=0
-    cmd_doctor || rc=$?
+    cmd_doctor "$@" || rc=$?
     exit "$rc"
     ;;
   *)
