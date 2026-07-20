@@ -37,7 +37,7 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 usage() {
   cat <<'EOF'
@@ -535,7 +535,15 @@ ate_port_listening() {
   tool="$(ate_port_tool)"
   case "$tool" in
     lsof)
-      lsof -ti tcp:"$port" >/dev/null 2>&1
+      # -sTCP:LISTEN restricts to sockets in the LISTEN state. WITHOUT it,
+      # `lsof -ti tcp:PORT` also matches ESTABLISHED sockets — i.e. any CLIENT
+      # connected to that port (a browser hitting the dev server, another peer's
+      # inbound connection) — so a port with no server but a live client connection
+      # would read as "listening", and the pid it reports would be the client's,
+      # not the server's. That mismatch (with `ss`, which uses -l) let `down`
+      # mistake a connected client for the port holder and refuse to reap ataegina's
+      # own server. Match `ss -l` semantics: listeners only.
+      lsof -ti tcp:"$port" -sTCP:LISTEN >/dev/null 2>&1
       ;;
     ss)
       # -H (no header) is newer ss; if it is rejected, parse without it and drop
@@ -565,7 +573,11 @@ ate_port_pids() {
   tool="$(ate_port_tool)"
   case "$tool" in
     lsof)
-      lsof -ti tcp:"$port" 2>/dev/null || true
+      # -sTCP:LISTEN: only the LISTENER pid(s), not connected clients — see the
+      # note in ate_port_listening. Matches the `ss -l` branch below, so the pid
+      # we report as the port "holder" is the server, never a peer that merely
+      # connected to it.
+      lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true
       ;;
     ss)
       # ss -p emits  users:(("name",pid=1234,fd=7))  -- pull out each pid=N.
