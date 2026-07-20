@@ -212,7 +212,7 @@ always).
 | `ataegina env [--no-export]` | Print this tree's derived environment (index, ports, URLs, log dir, and the per-worktree DB name + URL when configured) as eval-able shell — the same variables `up` injects into your servers. `eval "$(ataegina env)"` reproduces it in your own shell; `--no-export` drops the `export ` prefix for `> .env` |
 | `ataegina exec [--] CMD [args...]` | Run `CMD` with this tree's derived environment injected (same vars as `env`), inheriting stdio and the current directory, exiting with `CMD`'s status. The one-shot form of `eval "$(ataegina env)"` — e.g. `ataegina exec -- pytest` or `ataegina exec -- psql "$DATABASE_URL"` |
 | `ataegina move N` | Relocate this worktree to index `N` (and its derived port slot); stops the old slot's servers, refuses an index another live worktree holds, and rejects index 0 |
-| `ataegina list` | List every registered worktree (flags stale entries) |
+| `ataegina list [--json]` | List every registered worktree (flags stale entries). `--json` emits a JSON array of the slot shape per worktree (primary first) plus `stale` (its directory is gone) and `live` (coarse best-effort: a derived port is listening) — the fleet view a supervising agent uses to see all its workers at once |
 | `ataegina prune` | Drop registry entries whose worktree directory is gone |
 | `ataegina doctor` | Run read-only diagnostics for this tree (never mutates; nonzero exit on a hard failure, so it works as a CI gate) |
 | `ataegina config <get\|set\|list\|unset\|path> [...]` | Read or change config values without opening the file (see "Configuration") |

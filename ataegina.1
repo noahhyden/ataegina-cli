@@ -205,8 +205,15 @@ An optional
 .B \-\-
 separates ataegina's arguments from the command.
 .TP
-.B list
-Show all registered worktrees and their indices.
+.B list \fR[--json]
+Show all registered worktrees and their indices (stale entries flagged). With
+.B --json
+emit a JSON array of the slot shape per worktree (primary first) plus
+.I stale
+(its directory is gone) and
+.I live
+(a coarse best-effort "a derived port is listening") \(em the fleet view a
+supervising agent uses to see all its workers at once.
 .TP
 .B move \fIN
 Relocate this worktree to index

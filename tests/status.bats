@@ -131,10 +131,10 @@ status_ss() {
 @test "completion advertises status --json (bash + zsh)" {
   run ate completion bash
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'ports|status) COMPREPLY=.*--json'
+  echo "$output" | grep -Eq '[ (|]status[|)].*--json'
   run ate completion zsh
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'ports|status) compadd -- --json'
+  echo "$output" | grep -Eq '[ (|]status[|)].*compadd -- --json'
 }
 
 @test "status --json: a server WE launched is reported 'running' (real process)" {

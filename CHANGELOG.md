@@ -13,6 +13,11 @@ line but were not separately git-tagged.
 
 ### Added
 
+- **`ataegina list --json`.** Emits the registry as a JSON array — the slot shape
+  per worktree (primary first) plus `stale` (its directory is gone) and `live` (a
+  coarse best-effort "a derived port is listening") — the fleet view a supervising
+  agent uses to see all its parallel workers at once. Human `list` output is
+  unchanged. Completes the agent-native surface in `docs/design/agent-native.md`.
 - **`ataegina up --json`.** Prints one machine-readable slot object on stdout —
   the `ports --json` shape plus `started` (the surfaces this invocation launched)
   and a per-surface `ready` boolean — while routing all human log/hook output to
