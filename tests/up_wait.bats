@@ -118,8 +118,8 @@ up_ss_listening() {
 @test "completion advertises up --wait (bash + zsh)" {
   run ate completion bash
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q -- '--scope --wait --force'
+  echo "$output" | grep -q -- '--scope --wait --json --force'
   run ate completion zsh
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q -- '--scope --wait --force'
+  echo "$output" | grep -q -- '--scope --wait --json --force'
 }

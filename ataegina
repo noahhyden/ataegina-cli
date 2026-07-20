@@ -45,9 +45,10 @@ ataegina - worktree-aware dev launcher (zero dependencies, pure bash)
 
 usage:
   ataegina init [options]               detect your stack, write ataegina.config.sh
-  ataegina up [both|backend|frontend] [--scope X] [--wait[=SECONDS]]   start dev
-                                        servers (default: both); --wait blocks until
-                                        they are ready and exits 75 if not (see up options)
+  ataegina up [both|backend|frontend] [--scope X] [--wait[=SECONDS]] [--json]   start
+                                        dev servers (default: both); --wait blocks until
+                                        they are ready and exits 75 if not; --json emits
+                                        a machine-readable slot object (see up options)
   ataegina down [both|backend|frontend] [--force]   stop dev servers (--force also
                                         reaps a slot held by a process ataegina did not start)
   ataegina restart [both|backend|frontend] [--scope X]   stop then start dev servers
@@ -81,6 +82,9 @@ up options:
                        (up to SECONDS, default 60 or $ATE_UP_WAIT), then exit 75 if
                        any is not ready by the deadline. Lets a caller gate on
                        `ataegina up --wait && <hit the server>`.
+  --json               emit one machine-readable slot object on stdout (the ports
+                       shape plus `started` and per-surface `ready`); all human
+                       output goes to stderr. Combine with --wait for a true `ready`.
 
 init options:
   --yes, -y            accept all detected values (no prompts; same as CI)
@@ -2042,9 +2046,14 @@ cmd_up() {
   # Set by --wait: block until every server this invocation launched is accepting
   # connections, then exit 75 if any is not ready by the deadline.
   local up_wait=""
+  # --json: emit one machine-readable slot object (plus what this invocation did)
+  # on stdout, sending every human log line and hook chatter to stderr so stdout
+  # stays pure JSON. An agent runs `up` and learns the slot + readiness in one shot.
+  local as_json=0
   while [ $# -gt 0 ]; do
     case "$1" in
       both|backend|frontend) mode="$1" ;;
+      --json) as_json=1 ;;
       --scope)
         UP_SCOPE_FLAG="${2:-}"; shift
         case "$UP_SCOPE_FLAG" in
@@ -2063,7 +2072,7 @@ cmd_up() {
       # seconds. Both block until the launched servers bind and gate up's exit code.
       --wait)       up_wait="${ATE_UP_WAIT:-60}" ;;
       --wait=*)     up_wait="${1#--wait=}" ;;
-      *) echo "ataegina up: unknown argument '$1' (both|backend|frontend, --scope X, --wait[=SECONDS])" >&2; exit 2 ;;
+      *) echo "ataegina up: unknown argument '$1' (both|backend|frontend, --scope X, --wait[=SECONDS], --json)" >&2; exit 2 ;;
     esac
     shift
   done
@@ -2082,6 +2091,11 @@ cmd_up() {
     echo "ataegina up: index #$N derives a port past 65535 (frontend :$FE_PORT, backend :$BE_PORT); use 'ataegina move' to a smaller index" >&2
     exit 2
   fi
+
+  # Under --json, save the real stdout on fd 3 and route stdout to stderr for the
+  # whole start+readiness phase, so log lines and hook chatter never pollute the
+  # JSON. Restored to fd 3 just before we emit the object.
+  [ "$as_json" = 1 ] && exec 3>&1 1>&2
 
   mkdir -p "$LOG_DIR"
   log "worktree #$N  $TREE"
@@ -2161,19 +2175,52 @@ cmd_up() {
   # fire-and-forget best-effort report ("ready" / "still starting" / "FAILED"),
   # always exiting 0. Nothing launched (scope backend/none with a shared backend, or
   # scope none) is trivially ready.
-  if [ -n "$up_wait" ]; then
-    local up_rc=0
-    [ "$did_be" = 1 ] && { ate_wait_ready "backend"  "$BE_PORT" "$BACKEND_URL"                 "$up_wait" || up_rc=75; }
-    [ "$did_fe" = 1 ] && { ate_wait_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"     "$up_wait" || up_rc=75; }
+  local up_rc=0 be_ready=0 fe_ready=0
+  if [ "$as_json" = 1 ] || [ -n "$up_wait" ]; then
+    # Strict readiness: block up to the effective timeout, capture a per-surface
+    # ready bool, and gate the exit code on --wait. Effective timeout is --wait's
+    # value when given, else 0 (a single immediate check — used by a plain
+    # `up --json`, which is fire-and-forget and stays exit 0 no matter the result).
+    local eff_to="${up_wait:-0}"
+    if [ "$did_be" = 1 ]; then
+      if ate_wait_ready "backend"  "$BE_PORT" "$BACKEND_URL"             "$eff_to"; then be_ready=1; elif [ -n "$up_wait" ]; then up_rc=75; fi
+    fi
+    if [ "$did_fe" = 1 ]; then
+      if ate_wait_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT" "$eff_to"; then fe_ready=1; elif [ -n "$up_wait" ]; then up_rc=75; fi
+    fi
+  else
+    # Fire-and-forget best-effort report (the plain `up`): "ready" / "still
+    # starting" / "FAILED", always exit 0.
+    [ "$did_be" = 1 ] && ate_report_ready "backend"  "$BE_PORT" "$BACKEND_URL"
+    [ "$did_fe" = 1 ] && ate_report_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"
+  fi
+
+  if [ "$as_json" = 1 ]; then
+    # Restore the real stdout and emit the slot object augmented with what THIS
+    # invocation did: `started` (surfaces we launched) and `ready` (their liveness).
+    exec 1>&3 3>&-
+    local started="" sep="" ready="" rsep=""
+    if [ "$did_be" = 1 ]; then
+      started="$started$sep\"backend\""; sep=","
+      ready="$ready$rsep\"backend\":$([ "$be_ready" = 1 ] && printf true || printf false)"; rsep=","
+    fi
+    if [ "$did_fe" = 1 ]; then
+      started="$started$sep\"frontend\""; sep=","
+      ready="$ready$rsep\"frontend\":$([ "$fe_ready" = 1 ] && printf true || printf false)"; rsep=","
+    fi
+    printf '{"index":%s,"repo_root":%s,"frontend":{"port":%s,"url":%s},"backend":{"port":%s,"url":%s},"log_dir":%s,"db":%s,"started":[%s],"ready":{%s}}\n' \
+      "$N" "$(json_str "$TREE")" \
+      "$FE_PORT" "$(json_str "http://localhost:$FE_PORT")" \
+      "$BE_PORT" "$(json_str "http://localhost:$BE_PORT")" \
+      "$(json_str "$LOG_DIR")" "$(emit_db_json)" \
+      "$started" "$ready"
     return "$up_rc"
   fi
-  [ "$did_be" = 1 ] && ate_report_ready "backend"  "$BE_PORT" "$BACKEND_URL"
-  [ "$did_fe" = 1 ] && ate_report_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"
   # Explicit success: without this the function returns the status of the last test
   # above, which is FALSE whenever no frontend was started (scope backend/none) — and
   # `set -e` at the `cmd_up` call site would then abort `up` with exit 1 despite a
   # fully successful start. (Same set -e + falsy-last-statement trap as emit_config.)
-  return 0
+  return "$up_rc"
 }
 
 # Print this worktree's derived environment as eval-able shell — the SAME variables
@@ -2312,7 +2359,7 @@ _ataegina() {
     return
   fi
   case "\${COMP_WORDS[1]}" in
-    up|down|restart|logs) COMPREPLY=( \$(compgen -W "both backend frontend --scope --wait --force -n --no-follow" -- "\$cur") ) ;;
+    up|down|restart|logs) COMPREPLY=( \$(compgen -W "both backend frontend --scope --wait --json --force -n --no-follow" -- "\$cur") ) ;;
     db)      COMPREPLY=( \$(compgen -W "name url create drop" -- "\$cur") ) ;;
     config)  COMPREPLY=( \$(compgen -W "list get set unset path --global" -- "\$cur") ) ;;
     env)     COMPREPLY=( \$(compgen -W "--no-export" -- "\$cur") ) ;;
@@ -2335,7 +2382,7 @@ _ataegina() {
     return
   fi
   case \$words[2] in
-    up|down|restart|logs) compadd -- both backend frontend --scope --wait --force -n --no-follow ;;
+    up|down|restart|logs) compadd -- both backend frontend --scope --wait --json --force -n --no-follow ;;
     db)      compadd -- name url create drop ;;
     config)  compadd -- list get set unset path --global ;;
     env)     compadd -- --no-export ;;
@@ -2508,7 +2555,12 @@ case "$CMD" in
     up_rc=0
     cmd_up "$@" || up_rc=$?
     # Opt-in, throttled, never blocks or affects the exit status of the work above.
-    ate_version_check_notice || true
+    # Under --json it must not touch stdout (which is pure JSON), so route it to
+    # stderr in that case.
+    case " $* " in
+      *" --json "*) ate_version_check_notice >&2 || true ;;
+      *)            ate_version_check_notice     || true ;;
+    esac
     exit "$up_rc"
     ;;
   down)
@@ -2539,14 +2591,24 @@ case "$CMD" in
     shift
     restart_mode=both
     case "${1:-}" in both|backend|frontend) restart_mode="$1" ;; esac
+    # Under --json the stop-phase chatter must not pollute stdout either; save the
+    # real stdout on fd 4 and route this phase to stderr, then restore before cmd_up
+    # (which does its own fd-3 swap and owns the JSON emission).
+    restart_json=0
+    case " $* " in *" --json "*) restart_json=1 ;; esac
+    [ "$restart_json" = 1 ] && exec 4>&1 1>&2
     case "$restart_mode" in
       both)     ate_stop_frontend; ate_stop_backend ;;
       backend)  ate_stop_backend ;;
       frontend) ate_stop_frontend ;;
     esac
+    [ "$restart_json" = 1 ] && exec 1>&4 4>&-
     restart_rc=0
     cmd_up "$@" || restart_rc=$?
-    ate_version_check_notice || true
+    case " $* " in
+      *" --json "*) ate_version_check_notice >&2 || true ;;
+      *)            ate_version_check_notice     || true ;;
+    esac
     exit "$restart_rc"
     ;;
   logs)
