@@ -11,6 +11,21 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-20
+
+### Fixed
+
+- **`lsof` port backend now counts only listeners, not connected clients.** With
+  `lsof` as the port tool, `ate_port_listening` / `ate_port_pids` ran
+  `lsof -ti tcp:PORT`, which also matches ESTABLISHED sockets — so any client
+  *connected* to a dev-server port (a browser hitting it, a peer's inbound
+  connection) was reported as the port's holder. In the worst case `ataegina down`
+  mistook such a client for the server and **refused to reap a process ataegina
+  itself launched**, orphaning it. Both branches now pass `-sTCP:LISTEN`, matching
+  the `ss -l` backend: only true listeners count. (Found while dogfooding a real
+  multi-worktree repo, where `down` misattributed frontend ports to `chrome` and a
+  `gnome-shell` extension.)
+
 ## [1.0.0] - 2026-07-20
 
 First stable release. ataegina is now a complete **agent-native** worktree dev
