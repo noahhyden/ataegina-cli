@@ -63,7 +63,8 @@ usage:
                                         shell (eval "$(ataegina env)")
   ataegina exec [--] CMD [args...]      run CMD with this tree's derived env
                                         injected (e.g. ataegina exec -- npm test)
-  ataegina list                         show all registered worktrees
+  ataegina list [--json]                show all registered worktrees (--json: a
+                                        JSON array with per-worktree stale/live)
   ataegina move N                       relocate this worktree to index N (new ports)
   ataegina prune                        drop registry entries whose tree is gone
   ataegina doctor                       read-only diagnostics for this tree
@@ -2340,6 +2341,76 @@ cmd_status() {
   return 0
 }
 
+# Emit ONE worktree's slot object for `list --json`, given its index and path.
+# Same slot shape as emit_slot_json but computed for an ARBITRARY (idx, path) from
+# the current repo's config (port bases, DB naming) rather than the current tree,
+# plus two list-only fields: `stale` (its directory is gone) and `live` (a coarse
+# best-effort "any of its derived ports is listening" — always false when the port
+# backend is `none`). The db object is derived exactly as `up` derives it per tree.
+_ate_list_entry_json() {
+  local idx="$1" path="$2"
+  local fe=$((FRONT_PORT_BASE + idx)) be=$((BACK_PORT_BASE + idx))
+  local logd="${LOG_DIR_BASE}${idx}"
+  local stale=false live=false
+  if [ -d "$path" ]; then
+    if ate_port_listening "$fe" || ate_port_listening "$be"; then live=true; fi
+  else
+    stale=true
+  fi
+  local db_json='null'
+  if [ -n "${DB_NAME:-}" ]; then
+    local dbname
+    if [ "$idx" = 0 ]; then dbname="$DB_NAME"; else dbname="${DB_NAME}${DB_SUFFIX}${idx}"; fi
+    # Subshell so setting ATE_DB_NAME/_ate_db_url for this entry never leaks into the
+    # current tree's globals; emit_db_json reads exactly those two.
+    db_json="$( ATE_DB_NAME="$dbname"; _ate_db_url=""; [ -n "${DB_URL_TEMPLATE:-}" ] && eval "_ate_db_url=\"$DB_URL_TEMPLATE\""; emit_db_json )"
+  fi
+  printf '{"index":%s,"repo_root":%s,"frontend":{"port":%s,"url":%s},"backend":{"port":%s,"url":%s},"log_dir":%s,"db":%s,"stale":%s,"live":%s}' \
+    "$idx" "$(json_str "$path")" \
+    "$fe" "$(json_str "http://localhost:$fe")" \
+    "$be" "$(json_str "http://localhost:$be")" \
+    "$(json_str "$logd")" "$db_json" "$stale" "$live"
+}
+
+# `ataegina list [--json]` — every registered worktree of this repo. Human form is
+# a tab table (primary first, stale entries flagged). --json is a JSON ARRAY of the
+# slot shape + stale/live per entry: the fleet view a supervising agent uses to see
+# all its workers at once (docs/design/agent-native.md).
+cmd_list() {
+  local as_json=0 _arg
+  for _arg in "$@"; do
+    case "$_arg" in
+      --json) as_json=1 ;;
+      *) echo "ataegina list: unknown argument '$_arg' (--json)" >&2; exit 2 ;;
+    esac
+  done
+  if [ "$as_json" = 1 ]; then
+    local out sep="" idx path
+    out="[$(_ate_list_entry_json 0 "$PRIMARY")"; sep=","
+    if [ -f "$REGISTRY" ]; then
+      while IFS=$'\t' read -r idx path; do
+        [ -z "$idx" ] && continue
+        # The primary is emitted above; skip a stray idx-0 row so it never doubles.
+        [ "$idx" = 0 ] && continue
+        out="$out$sep$(_ate_list_entry_json "$idx" "$path")"
+      done < "$REGISTRY"
+    fi
+    printf '%s]\n' "$out"
+    return 0
+  fi
+  printf '0\t%s (primary)\n' "$PRIMARY"
+  if [ -f "$REGISTRY" ]; then
+    while IFS=$'\t' read -r idx path; do
+      [ -z "$idx" ] && continue
+      if [ -d "$path" ]; then
+        printf '%s\t%s\n' "$idx" "$path"
+      else
+        printf '%s\t%s  \033[1;33m(stale - run: ataegina prune)\033[0m\n' "$idx" "$path"
+      fi
+    done < "$REGISTRY"
+  fi
+}
+
 # Print a shell completion script to stdout. Needs no worktree/config, so it runs
 # before the git-worktree requirement — you source it from an rc file anywhere.
 # The subcommand list mirrors the dispatch; keep it in sync when adding commands.
@@ -2363,7 +2434,7 @@ _ataegina() {
     db)      COMPREPLY=( \$(compgen -W "name url create drop" -- "\$cur") ) ;;
     config)  COMPREPLY=( \$(compgen -W "list get set unset path --global" -- "\$cur") ) ;;
     env)     COMPREPLY=( \$(compgen -W "--no-export" -- "\$cur") ) ;;
-    ports|status) COMPREPLY=( \$(compgen -W "--json" -- "\$cur") ) ;;
+    ports|status|list) COMPREPLY=( \$(compgen -W "--json" -- "\$cur") ) ;;
     *)       COMPREPLY=() ;;
   esac
 }
@@ -2386,7 +2457,7 @@ _ataegina() {
     db)      compadd -- name url create drop ;;
     config)  compadd -- list get set unset path --global ;;
     env)     compadd -- --no-export ;;
-    ports|status) compadd -- --json ;;
+    ports|status|list) compadd -- --json ;;
   esac
 }
 _ataegina "\$@"
@@ -2688,17 +2759,8 @@ case "$CMD" in
     echo "$open_url"
     ;;
   list)
-    printf '0\t%s (primary)\n' "$PRIMARY"
-    if [ -f "$REGISTRY" ]; then
-      while IFS=$'\t' read -r idx path; do
-        [ -z "$idx" ] && continue
-        if [ -d "$path" ]; then
-          printf '%s\t%s\n' "$idx" "$path"
-        else
-          printf '%s\t%s  \033[1;33m(stale - run: ataegina prune)\033[0m\n' "$idx" "$path"
-        fi
-      done < "$REGISTRY"
-    fi
+    shift
+    cmd_list "$@"
     ;;
   prune)
     [ -f "$REGISTRY" ] || { log "no registry to prune"; exit 0; }
