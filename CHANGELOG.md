@@ -11,6 +11,70 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+### Changed
+
+- **`ataegina update` now delegates to `install.sh` instead of reimplementing
+  it.** The launcher carried a second copy of the installer's whole flow —
+  resolve the latest tag, download, verify SHA-256, `bash -n` parse-check,
+  install — alongside `ate_sha256`, `ate_latest_tag` and `ate_version_gt`.
+  `update` now fetches `install.sh` and runs it with `ATE_BIN` pointed at the
+  directory of the script it resolved, so verification happens in exactly one
+  place. `ATE_RELEASES_URL`, `ATE_RAW_BASE` and `GH_TOKEN` still apply.
+  **Behaviour lost:** the "already on the latest version" short-circuit (update
+  now always reinstalls; `install.sh` is idempotent) and the `.bak` rollback
+  file.
+- **Removed the opt-in update-check notice.** `ATE_UPDATE_CHECK=1` and the
+  throttled "a newer version is available" line at the end of `up` are gone,
+  along with the config key. The tool now makes no network call unless you run
+  `ataegina update`.
+- **Deduplicated the hook, readiness and database layers.** The two start hooks
+  were one body with the label swapped, and `ate_report_ready` / `ate_wait_ready`
+  were two poll loops over the same probe. They now share `_ate_start_surface`
+  and `_ate_poll_ready`, and `ate_db_create` / `ate_db_drop` share `_ate_db_run`.
+  All four public hook names remain overridable from a config file, and
+  `doctor`'s detection of a user-redefined start hook is unchanged.
+- **The four slot-JSON emitters share one format.** `ports --json`,
+  `status --json`, `up --json` and `list --json` each printed their own copy of
+  the slot object; they now call one emitter. Output is unchanged.
+- **`config set` rewrites the file in one awk pass.** The two-pass sentinel dance
+  existed only because `awk -v` mangles backslashes in an already-quoted value;
+  passing the value through the environment avoids that entirely.
+- **`emit_quote` is gone in favour of `config_quote`.** It was the same function
+  without the single-quote escaping, so a generated config value containing a
+  quote now round-trips correctly.
+
+### Removed
+
+- **1381 lines of superseded documentation.** The `smart-ports`, `portability`
+  and `onboarding-redesign` design docs and the three dogfooding logs described
+  features that shipped in v0.5.0 through v1.0.0. `docs/design/agent-native.md`
+  is kept — the test suite cites it as a live spec.
+- **The coverage gate and `scripts/coverage.sh`.** Measuring line coverage
+  needed bashcov run once per bats file with the results unioned in Python,
+  because SimpleCov's single resultset races under bats. That cost ruby, the
+  bashcov gem and a CI job to re-assert what the `test`, `integration`,
+  `macos-bash32` and `windows-gitbash` jobs already cover.
+
+### Added
+
+- **`AGENTS.d/` and two context guards.** A rule is one file of one line of at
+  most 255 characters (`check_agents_rule_length.py`), and explanation in code
+  is capped at one line, ratcheted against a baseline that may only shrink
+  (`check_one_line_comments.py`). The bash scanner tracks heredoc delimiters so
+  `#` lines inside `usage()`, the config header and the completion scripts are
+  read as output rather than prose, and claims extensionless files by shebang so
+  the launcher itself is scanned. `ataegina.config.example.sh` is exempt: its
+  comments are the reference users read, not explanation of code.
+
+### Known issues
+
+- **`resolve_index` can still hand two worktrees the same index.** The `mkdir`
+  mutex gives up after a bounded ~10s spin and proceeds anyway, so a heavily
+  loaded machine can produce the collision the tool exists to prevent.
+  `tests/concurrency.bats` fails intermittently on exactly this (observed once
+  on a CI runner as `12 rows, 11 distinct`). Pre-existing; not introduced by the
+  changes above.
+
 ## [1.0.1] - 2026-07-20
 
 ### Fixed
