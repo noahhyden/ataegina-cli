@@ -3,7 +3,6 @@
     ".github/workflows/ci.yml": 4,
     ".github/workflows/release.yml": 2,
     "ataegina": 149,
-    "ataegina.config.example.sh": 14,
     "docs/demo-setup.sh": 2,
     "docs/social-preview.py": 1,
     "install.sh": 5,

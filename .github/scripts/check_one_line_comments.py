@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_PATH = REPO_ROOT / ".github" / "one-line-comment-baseline.json"
 
 SKIP_PREFIXES: tuple[str, ...] = (
+    "ataegina.config.example.sh",
     "sandbox/.work/",
     "coverage/",
     "node_modules/",
