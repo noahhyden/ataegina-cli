@@ -1,39 +1,5 @@
 #!/usr/bin/env bash
-# ataegina - a tiny, zero-dependency harness for running fleets of AI coding
-# agents (or just yourself) across parallel git worktrees without port or
-# database collisions.
-#
-# Each worktree gets a STABLE integer index N, assigned once and persisted in a
-# machine-local registry. From N we derive a non-overlapping port slot:
-#
-#   frontend port = FRONT_PORT_BASE + N   (default 5173 + N)
-#   backend  port = BACK_PORT_BASE  + N   (default 8000 + N)
-#   log dir       = LOG_DIR_BASE + N       (default /tmp/ate-wtN)
-#
-# The primary checkout is index 0; every additional worktree gets the next free
-# slot. The mapping is sticky: the same tree always gets the same ports across
-# runs, so long-lived background agents keep their addresses.
-#
-# It anchors on the worktree you run it FROM ($PWD's git toplevel), exports the
-# derived env, and then invokes YOUR dev-server hooks (configured in
-# ataegina.config.sh). It does not assume any particular stack; the hooks decide
-# what "start the frontend" and "start the backend" mean for your project.
-#
-# Usage:
-#   ataegina init [options]               # detect your stack, write ataegina.config.sh
-#   ataegina up [both|backend|frontend] [--scope X]  # start dev servers (default: both)
-#   ataegina down [both|backend|frontend] # stop dev servers
-#   ataegina ports                        # show this tree's index, ports, urls
-#   ataegina list                         # show all registered worktrees
-#   ataegina prune                        # drop registry entries whose tree is gone
-#   ataegina doctor                       # read-only diagnostics for this tree
-#   ataegina update                       # self-update to the latest published release
-#   ataegina --version                    # print version and exit
-#   ataegina --help                       # print this usage and exit
-#
-# Override the auto-assigned index for one invocation with ATE_INDEX=<n>.
-#
-# Suggested shell alias:  alias ate='ataegina'
+# ataegina: zero-dependency harness giving each git worktree a sticky index N and derived ports (see usage).
 
 set -euo pipefail
 
@@ -140,27 +106,21 @@ config keys (set in ataegina.config.sh; see ataegina.config.example.sh):
 EOF
 }
 
-# Top-level flags are honored before anything else (and before requiring a git
-# worktree), so `ataegina --version` works from anywhere.
+# Top-level flags run before the worktree check so `--version` works anywhere.
 case "${1:-}" in
   --version|-v) echo "ataegina $VERSION"; exit 0 ;;
   --help|-h)    usage; exit 0 ;;
   '')           usage; exit 0 ;;
 esac
 
-# ---------------------------------------------------------------------------
-# Defaults (overridable by the config file and/or the environment).
-# ---------------------------------------------------------------------------
+# Defaults (overridable by config file and environment).
 FRONT_PORT_BASE="${FRONT_PORT_BASE:-5173}"
 BACK_PORT_BASE="${BACK_PORT_BASE:-8000}"
 LOG_DIR_BASE="${LOG_DIR_BASE:-/tmp/ate-wt}"
 REGISTRY_DIR="${ATE_REGISTRY_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/ataegina}"
 REGISTRY="${ATE_REGISTRY:-$REGISTRY_DIR/worktree-index}"
 
-# Per-worktree database deconfliction (OFF unless DB_NAME is set, so existing
-# configs are unaffected). When on, each worktree N>0 gets its own database
-# DB_NAME$DB_SUFFIX$N; the primary (index 0) keeps the unsuffixed DB_NAME (your
-# shared dev DB). See the "database" hooks and the exports section below.
+# DB deconfliction is OFF unless DB_NAME is set; worktree N>0 gets DB_NAME$DB_SUFFIX$N, the primary keeps DB_NAME.
 DB_NAME="${DB_NAME:-}"
 DB_KIND="${DB_KIND:-postgres}"      # postgres | mysql | sqlite | custom
 DB_SUFFIX="${DB_SUFFIX:-_wt}"       # worktree DB = DB_NAME + DB_SUFFIX + N
@@ -170,16 +130,7 @@ DB_AUTO_CREATE="${DB_AUTO_CREATE:-1}"      # `up` ensures a worktree DB exists
 DB_CREATE_CMD="${DB_CREATE_CMD:-}"  # override the per-kind default create cmd
 DB_DROP_CMD="${DB_DROP_CMD:-}"      # override the per-kind default drop cmd
 
-# Resolve the registry file for THIS repo. The registry is per-repo by default so
-# two unrelated checkouts never share one index space (which would otherwise make
-# both their primaries index 0 -> identical ports, and leak worktree indices
-# across repos). Precedence:
-#   1. $ATE_REGISTRY set  -> use it verbatim (one explicit shared file)
-#   2. else               -> a per-repo file under $REGISTRY_DIR/repos/<key>
-# The key is derived from the PRIMARY checkout's toplevel path: a readable
-# basename prefix plus a portable cksum digest (POSIX; no shasum dependency), so
-# it is stable across runs and filesystem-safe. Requires PRIMARY to be resolved,
-# so it is a function called after the worktree toplevel is known (not at load).
+# Registry file is per-repo ($ATE_REGISTRY overrides), keyed by the PRIMARY toplevel (basename + cksum); call after PRIMARY resolves.
 ate_registry_file() {
   if [ -n "${ATE_REGISTRY:-}" ]; then
     printf '%s\n' "$ATE_REGISTRY"
@@ -192,24 +143,13 @@ ate_registry_file() {
   printf '%s\n' "$REGISTRY_DIR/repos/$key"
 }
 
-# ---------------------------------------------------------------------------
-# Self-update: `ataegina update` delegates to install.sh (which resolves the
-# latest tag, downloads, verifies SHA-256, parse-checks and installs).
-#
-# Overridable bases (point at a local stub for testing):
-#   ATE_RELEASES_URL  the "latest release" JSON feed (passed through to install.sh)
-#   ATE_RAW_BASE      base for raw files; install.sh is <ATE_RAW_BASE>/HEAD/install.sh
-# ---------------------------------------------------------------------------
+# Self-update delegates to install.sh; ATE_RELEASES_URL and ATE_RAW_BASE point it at a local stub for tests.
 
 ATE_REPO_SLUG="noahhyden/ataegina-cli"
 ATE_RELEASES_URL="${ATE_RELEASES_URL:-https://api.github.com/repos/${ATE_REPO_SLUG}/releases/latest}"
 ATE_RAW_BASE="${ATE_RAW_BASE:-https://raw.githubusercontent.com/${ATE_REPO_SLUG}}"
 
-# Fetch a URL to stdout. Tries curl, then wget. TIMEOUT is in seconds. Returns
-# the fetch tool's exit code; nonzero on any network/HTTP error (curl -f makes
-# HTTP >=400 a failure; wget does so by default). file:// works with both, which
-# is what the local-stub tests lean on. A GH_TOKEN, if set, is sent as a bearer
-# so the (currently private) repo's feed is reachable for the maintainer.
+# Fetch a URL to stdout via curl then wget, returning the tool's exit code (nonzero on network/HTTP error); GH_TOKEN is sent as bearer.
 ate_fetch() {
   local url="$1" timeout="${2:-20}"
   if command -v curl >/dev/null 2>&1; then
@@ -229,10 +169,7 @@ ate_fetch() {
   fi
 }
 
-# Resolve this running script's own absolute path, following symlinks portably
-# (macOS readlink has no -f, so we walk the chain ourselves). Prefers an
-# installed `ataegina` on PATH, then $0. Prints the resolved path on stdout;
-# nonzero if it cannot be resolved.
+# Resolve this script's own path through symlinks without `readlink -f` (absent on macOS); nonzero if unresolvable.
 ate_self_path() {
   local src
   src="$(command -v ataegina 2>/dev/null)" || src=""
@@ -279,29 +216,16 @@ ate_update() {
   return "$rc"
 }
 
-# ---------------------------------------------------------------------------
-# Port detection backend. lsof is the classic probe but is frequently missing
-# on minimal Debian/Ubuntu. So we abstract "is this port up / who holds it"
-# behind a small tool layer with several interchangeable backends, auto-detected
-# once and memoized. Define these BEFORE the hooks below, because the default
-# stop hooks call them.
-#
-# Backends, in auto-detect preference order: lsof, ss (iproute2), fuser, proc
-# (parse /proc/net/tcp*, listening-detection only), else none. Override with
-# ATE_PORT_TOOL=lsof|ss|fuser|proc|none.
-# ---------------------------------------------------------------------------
+# Port detection backends (lsof, ss, fuser, proc, none; ATE_PORT_TOOL overrides) must be defined BEFORE the default stop hooks that call them.
 
-# Resolve which port backend to use, once, and cache it in _ATE_PORT_TOOL.
-# Honors an explicit ATE_PORT_TOOL override (validated; an unknown/unavailable
-# value falls through to auto-detect). Echoes the resolved tool name.
+# Resolve the port backend once into _ATE_PORT_TOOL; an unusable ATE_PORT_TOOL falls through to auto-detect.
 _ATE_PORT_TOOL=""
 ate_port_tool() {
   if [ -n "$_ATE_PORT_TOOL" ]; then printf '%s\n' "$_ATE_PORT_TOOL"; return 0; fi
   local want="${ATE_PORT_TOOL:-}"
   case "$want" in
     lsof|ss|fuser|proc|none)
-      # Honor the override only if the tool is actually usable; otherwise we
-      # would silently mis-probe. none and proc need no external binary.
+      # Honor the override only if the tool is usable, else we would silently mis-probe.
       case "$want" in
         lsof)  command -v lsof  >/dev/null 2>&1 && _ATE_PORT_TOOL="lsof" ;;
         ss)    command -v ss    >/dev/null 2>&1 && _ATE_PORT_TOOL="ss" ;;
@@ -312,8 +236,7 @@ ate_port_tool() {
       ;;
   esac
   if [ -z "$_ATE_PORT_TOOL" ]; then
-    # Auto-detect: lsof, then ss, then fuser, then proc (if /proc/net/tcp is
-    # readable), else none.
+    # Auto-detect order: lsof, ss, fuser, proc (if /proc/net/tcp readable), else none.
     if command -v lsof >/dev/null 2>&1; then
       _ATE_PORT_TOOL="lsof"
     elif command -v ss >/dev/null 2>&1; then
@@ -329,18 +252,14 @@ ate_port_tool() {
   printf '%s\n' "$_ATE_PORT_TOOL"
 }
 
-# Parse /proc/net/tcp and /proc/net/tcp6 for a LISTEN socket (state 0A) on the
-# given decimal local port. Returns 0 if found, 1 otherwise. Linux-only; the
-# files simply will not exist elsewhere, in which case we return 1.
+# Scan /proc/net/tcp and tcp6 for a LISTEN socket (state 0A) on a decimal port; Linux-only.
 _ate_proc_listening() {
   local port="$1" f hexport line lp st
-  # Upper-case hex, zero-padded to 4 (the local_address column is HOST:PORT in
-  # uppercase hex). printf gives us a portable 16#-free encoding.
+  # Upper-case zero-padded hex, matching the local_address column.
   hexport="$(printf '%04X' "$port" 2>/dev/null)" || return 1
   for f in /proc/net/tcp /proc/net/tcp6; do
     [ -r "$f" ] || continue
-    # Columns: sl local_address rem_address st ...  local_address is HEX:HEX.
-    # We want st == 0A (LISTEN) and the local port half == hexport.
+    # Match st == 0A (LISTEN) and the local port half == hexport.
     while read -r line; do
       # Skip the header row (starts with "sl").
       case "$line" in
@@ -359,27 +278,17 @@ _ate_proc_listening() {
   return 1
 }
 
-# ate_port_listening PORT -> 0 if something is LISTENing on the TCP port, else 1.
-# With the 'none' backend we cannot tell, so we report "not listening" (1): that
-# keeps `up` starting servers; callers warn about the degraded check separately.
+# ate_port_listening PORT -> 0 if LISTENing; the 'none' backend reports 1 so `up` still starts servers.
 ate_port_listening() {
   local port="$1" tool
   tool="$(ate_port_tool)"
   case "$tool" in
     lsof)
-      # -sTCP:LISTEN restricts to sockets in the LISTEN state. WITHOUT it,
-      # `lsof -ti tcp:PORT` also matches ESTABLISHED sockets — i.e. any CLIENT
-      # connected to that port (a browser hitting the dev server, another peer's
-      # inbound connection) — so a port with no server but a live client connection
-      # would read as "listening", and the pid it reports would be the client's,
-      # not the server's. That mismatch (with `ss`, which uses -l) let `down`
-      # mistake a connected client for the port holder and refuse to reap ataegina's
-      # own server. Match `ss -l` semantics: listeners only.
+      # -sTCP:LISTEN is required: without it lsof matches connected CLIENTS, so `down` mistakes a client for the holder (AGENTS.d/100).
       lsof -ti tcp:"$port" -sTCP:LISTEN >/dev/null 2>&1
       ;;
     ss)
-      # -H (no header) is newer ss; if it is rejected, parse without it and drop
-      # the header line ourselves. Either way, any matching row means listening.
+      # -H is newer ss; if rejected, parse without it and drop the header line.
       local out
       out="$(ss -ltnH "sport = :$port" 2>/dev/null)" \
         || out="$(ss -ltn "sport = :$port" 2>/dev/null | grep -v 'State.*Recv-Q')"
@@ -397,18 +306,13 @@ ate_port_listening() {
   esac
 }
 
-# ate_port_pids PORT -> print the pid(s) holding the port (space/newline
-# separated), empty if none or if the backend cannot map pids. proc/none cannot
-# cheaply map pids, so they return empty.
+# ate_port_pids PORT -> pid(s) holding the port; empty if none or the backend cannot map pids (proc/none).
 ate_port_pids() {
   local port="$1" tool
   tool="$(ate_port_tool)"
   case "$tool" in
     lsof)
-      # -sTCP:LISTEN: only the LISTENER pid(s), not connected clients — see the
-      # note in ate_port_listening. Matches the `ss -l` branch below, so the pid
-      # we report as the port "holder" is the server, never a peer that merely
-      # connected to it.
+      # -sTCP:LISTEN: report the server pid, never a connected client (AGENTS.d/100).
       lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true
       ;;
     ss)
@@ -426,9 +330,7 @@ ate_port_pids() {
   esac
 }
 
-# ate_port_proc_desc PORT -> best-effort "pid (command)" string for doctor's
-# neutral "in use by ..." line. Degrades to just the pid, or to a clear
-# "(pid unknown)" when the backend cannot resolve pids.
+# ate_port_proc_desc PORT -> best-effort "pid (command)" for doctor; degrades to the pid or "(pid unknown)".
 ate_port_proc_desc() {
   local port="$1" pid cmd
   pid="$(ate_port_pids "$port" | head -n1 || true)"
@@ -444,31 +346,7 @@ ate_port_proc_desc() {
   fi
 }
 
-# Hooks. These DEFAULT implementations consume the declarative config vars
-# (FRONTEND_DIR/CMD/ENV, BACKEND_DIR/CMD/ENV) so most users never write bash.
-# They are defined BEFORE the config is sourced, so a user who defines their own
-# ate_start_frontend / ate_start_backend (or the stop hooks) in the config
-# OVERRIDES the default. That power-user escape hatch is intentional; keep it.
-#
-# Each hook runs with the resolved env already exported (FRONTEND_PORT,
-# BACKEND_PORT, BACKEND_URL, FRONTEND_URL, FRONTEND_API_BASE_URL, REPO_ROOT,
-# DEV_LOG_DIR, ATE_INDEX). A *_CMD is a command string that may reference
-# $FRONTEND_PORT, $BACKEND_PORT, $BACKEND_URL, $FRONTEND_URL etc.; it is evaluated
-# by `sh -c` with those vars exported into its environment. A *_ENV is optional
-# extra KEY=VALUE assignments (one per line or semicolon-separated) exported
-# before the command runs, and may itself reference those vars -- this is how you
-# remap to whatever names YOUR app reads, e.g. NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL.
-# ataegina injects these into the process ENVIRONMENT; it never rewrites a .env
-# file. Whether the injected value wins over a committed .env depends on your
-# framework's precedence (Next.js: real env > .env.local; python-dotenv: env wins
-# unless load_dotenv(override=True)).
-# True (0) when a launch we recorded for $1 (backend|frontend) is still ALIVE and is
-# OURS (recorded start-time still matches) — i.e. a server we already started is still
-# coming up. The start hooks use this to avoid DOUBLE-LAUNCHING inside the boot window:
-# before the port binds, a second `up` guarding only on the port would start a SECOND
-# server, orphan the first, and overwrite its pidfile so `down` could no longer reap
-# it. A dead (or pid-reused) recorded launch means no launch is in progress -> allow a
-# fresh start (crash recovery). ate_pid_starttime is defined below; resolved at call time.
+# Default hooks consume *_DIR/CMD/ENV and precede config so it can override them (AGENTS.d/107); _ate_launch_in_progress closes the double-launch window (AGENTS.d/103).
 _ate_launch_in_progress() {
   local label="$1"
   local pidfile="${DEV_LOG_DIR:-}/$label.pid" startfile="${DEV_LOG_DIR:-}/$label.pidstart" lpid want got
@@ -476,33 +354,14 @@ _ate_launch_in_progress() {
   lpid="$(cat "$pidfile" 2>/dev/null || true)"
   [ -n "$lpid" ] || return 1
   kill -0 "$lpid" 2>/dev/null || return 1     # recorded launch pid is dead -> not in progress
-  # Require POSITIVE proof of ownership: a recorded start-time that STILL matches the
-  # live pid. Without it — a missing/empty start-time, or a mismatch (the pid was
-  # recycled by an unrelated process since) — do NOT claim a launch is in progress. An
-  # unverifiable record must never block a fresh `up` from starting the server.
+  # Require POSITIVE proof of ownership: a start-time that still matches the live pid; an unverifiable record must never block a fresh `up`.
   want="$(cat "$startfile" 2>/dev/null || true)"
   got="$(ate_pid_starttime "$lpid")"
   if [ -n "$want" ] && [ -n "$got" ] && [ "$want" = "$got" ]; then return 0; fi
   return 1
 }
 
-# _ate_port_ownership LABEL PORT -> prints exactly one of: ours | foreign | unknown
-#
-# Answers "did ataegina start the process currently holding PORT for LABEL?" — the
-# missing piece behind two long-standing rough edges: `up` implying success for a
-# port it never launched, and `down` killing an unrelated squatter on the slot.
-#
-#   ours     A port holder is inside the process tree of our recorded launch pid,
-#            and that pid is start-time-VERIFIED as ours (the same positive-proof
-#            guard `down` and _ate_launch_in_progress use). Definitely ours.
-#   foreign  We can map the port to live pid(s), NONE are in a verified tree of
-#            ours, AND we hold no launch record for this label at all. Definitely
-#            not ours.
-#   unknown  Either we cannot map the port to pids (proc/none backends), OR we DO
-#            have a launch record we simply cannot tie to the holder — e.g. a
-#            daemonize-style start whose recorded wrapper pid has already exited
-#            and left the real server reparented to init. Stay conservative here:
-#            never accuse our own (possibly reparented) server of being foreign.
+# _ate_port_ownership LABEL PORT -> ours | foreign | unknown; only a verified launch tree is ours, only no launch record is foreign (AGENTS.d/104).
 _ate_port_ownership() {
   local label="$1" port="$2" holders h
   holders="$(ate_port_pids "$port" | tr '\n' ' ')"
@@ -525,16 +384,12 @@ _ate_port_ownership() {
       case "$ourtree" in *" $h "*) echo ours; return 0 ;; esac
     done
   fi
-  # Holders are mappable but not tied to a verified launch of ours. If we launched
-  # *something* for this label (a record exists), be conservative — it may be our
-  # own reparented daemon; call it unknown, not foreign.
+  # A launch record exists but is not tied to the holder: call it unknown, not foreign, since it may be our reparented daemon.
   [ "$have_record" = 1 ] && { echo unknown; return 0; }
   echo foreign
 }
 
-# Shared body for the two start hooks. The public ate_start_backend /
-# ate_start_frontend wrappers below stay separate overridable functions (config may
-# redefine them; doctor diffs their source against the ATE_DEFAULT_START_* snapshot).
+# Shared body for the start hooks; the public wrappers stay separate so config can redefine them and doctor can diff them.
 _ate_start_surface() {  # label port cmd dir env url
   local label="$1" port="$2" cmd="$3" dir="$4" env="$5" url="$6" pad
   pad="$(printf '%-8s' "$label")"
@@ -550,13 +405,10 @@ _ate_start_surface() {  # label port cmd dir env url
   fi
   if _ate_launch_in_progress "$label"; then echo "$pad already starting on :$port (pid $(cat "$DEV_LOG_DIR/$label.pid" 2>/dev/null))"; return 0; fi
   ( export PORT="$port" BACKEND_PORT FRONTEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
-    # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
-    # single export covers every assignment (and each value gets exported into
-    # the child sh -c, not just set in this subshell).
+    # Normalize *_ENV to spaces so one export covers every assignment into the child sh -c.
     [ -n "$env" ] && eval "export $(printf '%s' "$env" | tr '\n;' '  ')"
     nohup sh -c "$cmd" > "$DEV_LOG_DIR/$label.log" 2>&1 &
-    # Record the launched pid so `down` can stop it even before it binds the port
-    # (dependency sync / first compile) — port-only teardown misses that window.
+    # Record the launched pid so `down` can stop it before it binds the port.
     echo $! > "$DEV_LOG_DIR/$label.pid"
     # Record its start-time too, so `down` can tell OUR pid from a recycled one.
     ate_pid_starttime "$!" > "$DEV_LOG_DIR/$label.pidstart" 2>/dev/null || true
@@ -566,29 +418,9 @@ _ate_start_surface() {  # label port cmd dir env url
 ate_start_backend()  { _ate_start_surface backend  "${BACKEND_PORT:-}"  "${BACKEND_CMD:-}"  "${BACKEND_DIR:-.}"  "${BACKEND_ENV:-}"  "${BACKEND_URL:-}"; }
 ate_start_frontend() { _ate_start_surface frontend "${FRONTEND_PORT:-}" "${FRONTEND_CMD:-}" "${FRONTEND_DIR:-.}" "${FRONTEND_ENV:-}" "http://localhost:${FRONTEND_PORT:-}"; }
 
-# Print PID plus every descendant of it, one per line, from a SINGLE ps snapshot
-# (consistent tree; no per-node re-shelling). Iterative BFS so it is bash-3.2-safe
-# and set -e-safe; portable ps (-Ao pid=,ppid= works on Linux and macOS/BSD).
-#
-# This is what lets `down` reap the worker/helper processes a dev server spawns but
-# that never hold the listening socket — uvicorn --reload (reloader + worker),
-# next dev / vite / esbuild, webpack/turbopack workers, a process manager. Killing
-# only the port holder (or only the recorded wrapper pid) orphaned those children;
-# they reparented to init and kept their memory, so every up/down cycle leaked one
-# — the "processes pile up untracked" drain the tool is meant to prevent.
-# A stable per-process start-time token, used to detect PID REUSE: a pid we recorded
-# at `up` may, after that process dies, be recycled by the OS for an UNRELATED process
-# before `down` runs — and then killing "our" recorded pid (and, since down walks its
-# tree, its whole tree) would take down the innocent process. Comparing the recorded
-# start-time to the pid's current one catches that. `ps -o lstart=` is portable (Linux
-# and macOS/BSD); empty if unavailable, in which case the caller simply skips the check.
+# Print PID plus every descendant from a SINGLE ps snapshot, via iterative BFS that is bash-3.2- and set -e-safe; down reaps the whole tree (AGENTS.d/102).
 ate_pid_starttime() {
-  # A DEAD pid makes `ps -p` exit non-zero; under `set -o pipefail` that fails the
-  # whole pipeline, and at a `got="$(ate_pid_starttime ...)"` call site `set -e`
-  # would then abort the caller — which made `ate down` bail out (leaking the port
-  # holder) whenever the pid it recorded at launch had already exited by teardown
-  # time (a wrapper that forks a server and exits: uvicorn --reload, next dev, a
-  # daemonizer). Tolerate it: a missing/dead pid simply yields the empty string.
+  # A dead pid makes `ps -p` fail under pipefail and set -e would abort `down`; tolerate it and yield an empty string (AGENTS.d/105).
   { ps -o lstart= -p "$1" 2>/dev/null || true; } | sed 's/^ *//;s/ *$//'
 }
 
@@ -607,20 +439,10 @@ ate_pid_tree() {
   printf '%s\n' $out | grep -E '^[0-9]+$' | sort -un || true
 }
 
-# Kill everything belonging to a side's server: whatever holds the port, the pid we
-# recorded at `up` (the launch wrapper — catches a server still starting, or a parent
-# supervisor ABOVE the port holder), and — crucially — the ENTIRE process tree under
-# each, so worker/helper children are reaped too. Trees are enumerated BEFORE any
-# kill (killing a parent first would reparent its children to init and hide them).
-# SIGTERM the set, brief grace, then SIGKILL any survivor.
+# Kill a side's port holder, recorded launch pid and the ENTIRE tree under each, enumerating trees BEFORE any kill (AGENTS.d/102); SIGTERM, grace, SIGKILL.
 _ate_stop_port() {
   local label="$1" port="$2" stopped=0 roots="" pid targets
-  # Do not reap a process we can POSITIVELY identify as foreign — one holding the
-  # slot that ataegina never launched and has no record of. `down` already refuses
-  # to kill a recycled recorded pid (the start-time guard below); this closes the
-  # matching gap of freely killing an unrelated squatter on the derived port.
-  # Ambiguous cases (unmappable pids, or our own possibly-reparented daemon) fall
-  # through to the normal teardown. ATE_DOWN_FORCE=1 (or `down --force`) overrides.
+  # Do not reap a positively-foreign port holder unless ATE_DOWN_FORCE=1 or `down --force`; ambiguous cases fall through (AGENTS.d/104).
   if [ "${ATE_DOWN_FORCE:-0}" != 1 ] && [ "$(_ate_port_ownership "$label" "$port")" = foreign ]; then
     echo "$label: :$port is held by a process ataegina did not start ($(ate_port_proc_desc "$port")) — leaving it alone (use 'ataegina down $label --force' to kill it)" >&2
     return 0
@@ -629,10 +451,7 @@ _ate_stop_port() {
   local pidfile="${DEV_LOG_DIR:-}/$label.pid" startfile="${DEV_LOG_DIR:-}/$label.pidstart" lpid
   if [ -n "${DEV_LOG_DIR:-}" ] && [ -f "$pidfile" ]; then
     lpid="$(cat "$pidfile" 2>/dev/null || true)"
-    # PID-reuse guard: if we recorded this pid's start-time at `up` and the pid is
-    # still alive but its start-time no longer matches, the id was recycled for an
-    # UNRELATED process since — do NOT adopt it as a kill root (which would reap that
-    # innocent process's whole tree). No record, or a matching one, means it's ours.
+    # PID-reuse guard: skip a live recorded pid whose start-time no longer matches, it is an unrelated process (AGENTS.d/101).
     if [ -n "$lpid" ] && [ -f "$startfile" ]; then
       local want got
       want="$(cat "$startfile" 2>/dev/null || true)"
@@ -679,29 +498,17 @@ _ate_stop_port() {
 ate_stop_backend()  { _ate_stop_port "backend"  "$BACKEND_PORT"; }
 ate_stop_frontend() { _ate_stop_port "frontend" "$FRONTEND_PORT"; }
 
-# After `up` launches a server, briefly poll its port so we can tell the user
-# whether it actually came up — instead of fire-and-forget that prints a URL for
-# a server that is still starting (or already dead). We do NOT block on slow
-# first runs (dependency sync, initial compile); we point at the log instead.
+# After `up`, briefly poll the port to report whether it came up, without blocking on slow first runs.
 ate_report_ready() { _ate_poll_ready "$1" "$2" "$3" 8 0; }
 
-# The contract behind `up --wait`. Block until $label's $port is accepting TCP
-# connections, up to $timeout seconds, then RETURN a status the caller turns into
-# up's exit code: 0 the moment it binds, 1 if the deadline passes without it. This
-# is what lets an agent write `ataegina up --wait && curl "$BACKEND_URL/health"`
-# with no hand-rolled poll loop and no race against a not-yet-bound port. Unlike
-# ate_report_ready (best-effort human messaging, always 0), this is strict and
-# terse. $timeout may be 0 (require ready right now). No crash-vs-slow diagnostic;
-# on failure we point at the log, which is where the reason lives.
+# Contract behind `up --wait`: 0 once $port accepts TCP, 1 after $timeout seconds; strict and terse, unlike best-effort ate_report_ready.
 ate_wait_ready() { _ate_poll_ready "$1" "$2" "$3" "$4" 1; }
 
-# One poll loop for both. strict=0: human messaging (skip foreign holder, tell a
-# DEAD launch from a slow one), always 0. strict=1: silent on crash, 1 on timeout.
+# One poll loop: strict=0 is human messaging and always 0, strict=1 is silent and returns 1 on timeout.
 _ate_poll_ready() {  # label port url timeout strict
   local label="$1" port="$2" url="$3" timeout="$4" strict="$5" i=0 lpid="" g
   if [ "$strict" = 0 ]; then
-    # A slot held by a positively-foreign process was already reported by the start
-    # hook ("not launching"); don't poll it and declare it "ready".
+    # A foreign holder was already reported by the start hook; do not poll it and declare it ready.
     if ate_port_listening "$port" && [ "$(_ate_port_ownership "$label" "$port")" = foreign ]; then
       return 0
     fi
@@ -714,9 +521,7 @@ _ate_poll_ready() {  # label port url timeout strict
       return 0
     fi
     [ "$i" -ge "$timeout" ] && break
-    # A launch pid that already exited without binding FAILED to start — but a
-    # launcher that FORKS the real server and exits leaves a dead pid while the
-    # child is still binding, so give the port a brief grace before declaring it.
+    # A dead launch pid may be a launcher that forked the real server, so give the port a brief grace first.
     if [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then
       g=0
       while [ "$g" -lt 15 ]; do
@@ -740,14 +545,9 @@ _ate_poll_ready() {  # label port url timeout strict
   return 0
 }
 
-# Database hooks. Like the start hooks, these DEFAULT implementations are defined
-# before the config is sourced, so a user who defines ate_db_create / ate_db_drop
-# in the config OVERRIDES them (e.g. to call `neon branches create`, a migration,
-# or a provider API instead of a local engine). ATE_DB_NAME is exported before
-# they run. The whole feature is inert unless DB_NAME is set in the config.
+# Default DB hooks run before config is sourced so ate_db_create/ate_db_drop can be overridden; inert unless DB_NAME is set.
 
-# The per-DB_KIND default create|drop command string (fed to sh -c). Empty for an
-# unknown kind, which forces the user to supply DB_CREATE_CMD/DB_DROP_CMD.
+# Per-DB_KIND default create|drop command (sh -c); empty for an unknown kind forces DB_CREATE_CMD/DB_DROP_CMD.
 ate_db_default_cmd() {  # $1 = create|drop
   case "$DB_KIND" in
     postgres|postgresql|pg)
@@ -757,8 +557,7 @@ ate_db_default_cmd() {  # $1 = create|drop
       if [ "$1" = create ]; then echo 'mysql -e "CREATE DATABASE IF NOT EXISTS \`$ATE_DB_NAME\`"'
       else echo 'mysql -e "DROP DATABASE IF EXISTS \`$ATE_DB_NAME\`"'; fi ;;
     sqlite|sqlite3)
-      # ATE_DB_NAME is a per-worktree file path: nothing to create (opened on
-      # first use); drop removes the file plus any WAL/SHM siblings.
+      # ATE_DB_NAME is a per-worktree file: nothing to create, drop removes the file plus WAL/SHM siblings.
       if [ "$1" = create ]; then echo ':'
       else echo 'rm -f "$ATE_DB_NAME" "$ATE_DB_NAME"-wal "$ATE_DB_NAME"-shm'; fi ;;
     *) echo '' ;;
@@ -775,9 +574,7 @@ _ate_db_run() {  # create|drop
 ate_db_create() { _ate_db_run create; }
 ate_db_drop()   { _ate_db_run drop; }
 
-# Best-effort idempotent create, called by `up` before the backend starts. Skips
-# the primary (index 0 uses the shared base DB) and is NON-FATAL: if the DB
-# already exists or the engine CLI is missing, it logs and lets the stack come up.
+# Best-effort idempotent create before `up`: skips the primary and is NON-FATAL if the DB exists or the CLI is missing.
 ate_db_ensure() {
   [ -n "${DB_NAME:-}" ] || return 0
   [ "$N" != 0 ] || return 0
@@ -809,15 +606,7 @@ cmd_db() {
   esac
 }
 
-# Stream THIS worktree's server logs in real time. `up` runs servers detached
-# (so they survive across invocations and across worktrees), so the log files are
-# the source of truth — this command just follows them.
-#
-# Scope is the whole answer to "8 worktrees would go wack": like every other
-# command, `logs` is anchored on $PWD's worktree, so it only ever follows the two
-# logs of the tree you are standing in. To watch another tree, cd there and run
-# `ate logs` (one terminal per worktree). A single target (`logs backend`) follows
-# one file directly for a clean Ctrl-C; `both` multiplexes with [be]/[fe] prefixes.
+# Stream THIS worktree's logs only (anchored on $PWD); `logs backend` follows one file, `both` multiplexes with [be]/[fe] prefixes.
 cmd_logs() {
   local target="both" lines=60 follow=1
   while [ $# -gt 0 ]; do
@@ -833,11 +622,7 @@ cmd_logs() {
   local be_log="$LOG_DIR/backend.log" fe_log="$LOG_DIR/frontend.log" fflag=""
   [ "$follow" = 1 ] && fflag="-f"
 
-  # Collect the file(s) to tail. `both` over multiple files makes tail print its
-  # own `==> file <==` banner when the active stream switches, which separates the
-  # two without us juggling background `tail | sed` pipelines (those orphan their
-  # tails when a log is idle on Ctrl-C). One `tail` process means `exec` hands it
-  # the terminal directly: Ctrl-C kills it cleanly, nothing left behind.
+  # Use ONE `tail` so `exec` hands it the terminal and Ctrl-C leaves nothing behind; background `tail | sed` pipes would orphan their tails.
   local files=""
   case "$target" in
     backend)
@@ -859,44 +644,26 @@ cmd_logs() {
   exec tail -n "$lines" $fflag $files
 }
 
-# ---------------------------------------------------------------------------
-# Scope detection (used by `up`). Classify what surface a worktree's task
-# touches so `up` can start only what is needed and point the rest at the
-# shared default servers in the primary checkout (frontend :FRONT_PORT_BASE,
-# backend :BACK_PORT_BASE). See the "Scope-aware startup" README section.
-# ---------------------------------------------------------------------------
+# Scope detection (used by `up`) classifies what a worktree touches so `up` starts only what is needed.
 
-# ate_task_scope WORKTREE BASE_REF FRONTEND_DIR BACKEND_DIR -> frontend|backend|both|none
-#
-# Classify every changed path (committed since the base + staged + unstaged +
-# untracked) into FE / BE / OTHER buckets by prefix match. Conservative rule:
-#   - any OTHER path (outside both dirs)  -> both   (shared libs, schema, config)
-#   - FE paths only                       -> frontend
-#   - BE paths only                       -> backend
-#   - FE and BE both touched, no OTHER    -> both
-#   - nothing changed                     -> none
+# ate_task_scope WORKTREE BASE_REF FRONTEND_DIR BACKEND_DIR -> frontend|backend|both|none; any path outside both dirs means both.
 ate_task_scope() {
   local wt="$1" base="$2" fe_dir="$3" be_dir="$4"
-  # Normalize dir prefixes: strip leading/trailing slashes, force ONE trailing
-  # slash so that 'app/' never prefix-matches 'apps/web/'. Empty dir => an
-  # unmatchable sentinel so it never hits.
+  # Force ONE trailing slash so 'app/' never matches 'apps/web/'; an empty dir becomes an unmatchable sentinel.
   local fe be
   fe="${fe_dir#/}"; fe="${fe%/}"
   be="${be_dir#/}"; be="${be%/}"
   [ -n "$fe" ] && fe="$fe/" || fe=$'\x01'
   [ -n "$be" ] && be="$be/" || be=$'\x01'
 
-  # Resolve the diff base. Prefer the merge-base with the base ref so we only see
-  # what THIS branch added, not everything base accumulated since the fork. Fall
-  # back to the raw ref, then to empty (compare working tree to HEAD only).
+  # Diff against the merge-base so only this branch's changes show; fall back to the raw ref, then working tree only.
   local mb=""
   if [ -n "$base" ]; then
     mb="$(git -C "$wt" merge-base "$base" HEAD 2>/dev/null || true)"
     [ -z "$mb" ] && git -C "$wt" rev-parse --verify -q "$base" >/dev/null 2>&1 && mb="$base"
   fi
 
-  # Three cheap samples: committed since base, tracked working changes (staged +
-  # unstaged via diff HEAD), and untracked files (which diff HEAD misses).
+  # Three samples: committed since base, tracked working changes, and untracked files (which diff HEAD misses).
   local paths
   paths="$(
     { [ -n "$mb" ] && git -C "$wt" diff --name-only "$mb"..HEAD 2>/dev/null
@@ -926,8 +693,7 @@ EOF
   echo none
 }
 
-# Resolve the trunk to diff against when ATE_BASE_BRANCH is unset: the first of
-# main / master / develop that exists in this worktree. Empty if none do.
+# Resolve the trunk when ATE_BASE_BRANCH is unset: first of main/master/develop that exists, else empty.
 ate_default_trunk() {
   local wt="$1" b
   for b in main master develop; do
@@ -936,15 +702,7 @@ ate_default_trunk() {
   echo ""
 }
 
-# Resolve the base ref scope detection should diff against. Repos whose
-# integration branch is not main/master/develop (e.g. prod is `main`, integration
-# is `dev`) would otherwise get the wrong base and an unreliable scope, so we
-# resolve in this precedence (first hit wins), echoing the chosen ref:
-#   1. $ATE_BASE_BRANCH                         (explicit override)
-#   2. the current branch's upstream            (e.g. origin/dev via @{upstream})
-#   3. the remote default branch                (refs/remotes/origin/HEAD -> origin/X)
-#   4. first local of main / master / develop   (ate_default_trunk)
-# Empty if none resolve (caller then compares the working tree only).
+# Resolve the scope base ref: $ATE_BASE_BRANCH, then upstream, then origin/HEAD, then ate_default_trunk; empty if none.
 ate_scope_base() {
   local wt="$1" base ref
   # 1. explicit override.
@@ -958,8 +716,7 @@ ate_scope_base() {
     printf '%s\n' "$base"
     return 0
   fi
-  # 3. the remote default branch from origin/HEAD, e.g.
-  #    refs/remotes/origin/dev -> origin/dev.
+  # 3. the remote default branch from origin/HEAD (refs/remotes/origin/dev -> origin/dev).
   ref="$(git -C "$wt" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
   if [ -n "$ref" ]; then
     # Strip refs/remotes/ to get origin/<branch>.
@@ -970,11 +727,7 @@ ate_scope_base() {
   ate_default_trunk "$wt"
 }
 
-# Read a `scope:` field from the front matter of the markdown file named by
-# $ATE_TASK_FILE (an optional per-run scope override). Echoes one of
-# frontend|backend|both|none, or empty if absent/unrecognized. Tolerates a
-# leading `--- ... ---` YAML-ish block and a bare leading `scope: X` line. No
-# YAML dependency; same grep/sed idiom the rest of the script uses.
+# Read the `scope:` field from $ATE_TASK_FILE's front matter; echoes frontend|backend|both|none or empty, no YAML dependency.
 ate_task_scope_field() {
   local f="$1"
   [ -f "$f" ] || return 0
@@ -982,29 +735,12 @@ ate_task_scope_field() {
     | head -n1 | sed -E 's/^scope:[[:space:]]*//I' | tr 'A-Z' 'a-z'
 }
 
-# ate_port_listening / ate_port_pids / ate_port_proc_desc live near the top of
-# the file (the default stop hooks call them); the scope-aware `up` liveness
-# check below uses the same ate_port_listening.
+# ate_port_* live near the top because the default stop hooks call them; scope-aware `up` reuses ate_port_listening.
 
-# ---------------------------------------------------------------------------
-# Load config. Search, in order: $ATE_CONFIG, the repo root, then the registry
-# dir. First hit wins. The file is sourced, so it can set the vars above and
-# define the hook functions.
-# ---------------------------------------------------------------------------
+# Load config: $ATE_CONFIG, the repo root, then the registry dir; first hit wins and the file is sourced.
 load_config() {
   local tree="$1" candidate
-  # Search order (first hit wins):
-  #   1. $ATE_CONFIG                    explicit override
-  #   2. <this worktree>/ataegina.config.sh
-  #   3. <PRIMARY checkout>/ataegina.config.sh
-  #   4. $REGISTRY_DIR/ataegina.config.sh   machine-wide default
-  # (3) is what makes the per-worktree workflow actually work: the config carries
-  # machine-specific ports/commands and so is naturally .gitignored, but git does NOT
-  # copy untracked files into a linked worktree — so a fresh worktree otherwise has NO
-  # config and `up` there failed with "no backend configured". Falling back to the
-  # primary checkout's config (the one the user ran `init` in) means every worktree
-  # inherits it and derives its own slot from its index, with no per-branch commit or
-  # global copy needed. The worktree's OWN config still wins if it has one.
+  # Search order: $ATE_CONFIG, this worktree, the PRIMARY checkout (untracked configs are not copied into linked worktrees), then $REGISTRY_DIR (AGENTS.d/106).
   for candidate in \
     "${ATE_CONFIG:-}" \
     "$tree/ataegina.config.sh" \
@@ -1020,23 +756,13 @@ load_config() {
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# init: detect the stack and write a declarative ataegina.config.sh. Interactive
-# by default (confirm each detected value, empty input accepts the default);
-# --yes / --non-interactive / a non-tty stdin skip the prompts and accept the
-# detected values, for scripting and CI.
-# ---------------------------------------------------------------------------
+# init: detect the stack and write ataegina.config.sh; --yes, --non-interactive or a non-tty accept detected values.
 
-# Read scripts.dev out of a package.json without a JSON parser. Pure sed/grep:
-# find the "scripts" object's "dev" key value. Good enough for the common shape.
+# Read scripts.dev from package.json with sed/grep, no JSON parser.
 pkg_dev_script() {
   local pkg="$1"
   [ -f "$pkg" ] || return 1
-  # Pull the value of the first "dev": "..." line. Handles escaped quotes loosely.
-  # No "dev" script is normal (a CLI/library package.json); grep then exits 1,
-  # which under `set -o pipefail` would fail the surrounding `dev="$(...)"`
-  # assignment and abort init via `set -e`. The trailing `|| true` keeps a
-  # no-match an empty-but-successful result, which the caller already handles.
+  # No "dev" script is normal and grep then exits 1, so the trailing `|| true` keeps pipefail from aborting init via set -e.
   grep -oE '"dev"[[:space:]]*:[[:space:]]*"[^"]*"' "$pkg" 2>/dev/null \
     | head -n1 | sed -E 's/.*"dev"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true
 }
@@ -1060,9 +786,7 @@ ask() {
 detect_frontend() {
   FE_DIR="" FE_KIND="" FE_CMD="" FE_ENV="" FE_NOTE=""
   local dirs d pkg dev
-  # Prefer a conventional subdir over the repo root: a dedicated frontend/ dir is
-  # a stronger signal than a package.json at the root (which may belong to tooling
-  # or a monorepo wrapper). The root is the last resort.
+  # Prefer a conventional subdir over the repo root, which may belong to tooling or a monorepo wrapper.
   if [ -n "${INIT_FRONTEND_DIR:-}" ]; then dirs="$INIT_FRONTEND_DIR"; else
     dirs="frontend apps/web client web ."; fi
   for d in $dirs; do
@@ -1071,8 +795,7 @@ detect_frontend() {
     if pkg_has_dep "$pkg" next; then FE_DIR="$d"; FE_KIND="next"; break; fi
     if pkg_has_dep "$pkg" nuxt; then FE_DIR="$d"; FE_KIND="nuxt"; break; fi
     if pkg_has_dep "$pkg" astro; then FE_DIR="$d"; FE_KIND="astro"; break; fi
-    # SvelteKit/Astro/Nuxt all sit ON TOP of vite, so they must be checked BEFORE
-    # the bare-vite fallback below or they'd be misdetected as generic vite.
+    # SvelteKit/Astro/Nuxt sit on top of vite, so check them BEFORE bare vite or they are misdetected.
     if pkg_has_dep "$pkg" @sveltejs/kit; then FE_DIR="$d"; FE_KIND="svelte"; break; fi
     if pkg_has_dep "$pkg" react-scripts; then FE_DIR="$d"; FE_KIND="cra"; break; fi
     if pkg_has_dep "$pkg" vite; then FE_DIR="$d"; FE_KIND="vite"; break; fi
@@ -1084,8 +807,7 @@ detect_frontend() {
   dev="$(pkg_dev_script "$pkg")"
   case "$FE_KIND" in
     next)
-      # If scripts.dev pins a port (-p / --port), bypass it and emit the dev
-      # binary directly so we control the per-slot port.
+      # If scripts.dev pins a port, bypass it and emit the dev binary directly so we control the per-slot port.
       if printf '%s' "$dev" | grep -qE -- '(-p|--port)([= ]|$)'; then
         FE_CMD='npx next dev -p $FRONTEND_PORT'
         FE_NOTE="next (dev script pinned a port, overriding per slot)"
@@ -1106,8 +828,7 @@ detect_frontend() {
       FE_NOTE="astro"
       ;;
     svelte)
-      # SvelteKit's dev server IS vite; exposing vars to the client needs the
-      # PUBLIC_ prefix ($env/static/public).
+      # SvelteKit's dev server is vite; client vars need the PUBLIC_ prefix.
       FE_CMD='npx vite dev --port $FRONTEND_PORT'
       FE_ENV='PUBLIC_API_BASE_URL=$BACKEND_URL'
       FE_NOTE="sveltekit (vite dev)"
@@ -1133,10 +854,7 @@ detect_frontend() {
 detect_backend() {
   BE_DIR="" BE_KIND="" BE_CMD="" BE_ENV="" BE_NOTE=""
   local dirs d base
-  # Prefer a conventional subdir over the repo root: a dedicated backend dir is a
-  # stronger signal than a pyproject.toml at the root. Root is last. (If your
-  # backend lives under a differently named dir, pass it at the init prompt or
-  # via INIT_BACKEND_DIR — it goes in your local config, not here.)
+  # Prefer a conventional subdir over the repo root; INIT_BACKEND_DIR overrides it for other names.
   if [ -n "${INIT_BACKEND_DIR:-}" ]; then dirs="$INIT_BACKEND_DIR"; else
     dirs="backend apps/api server api ."; fi
   for d in $dirs; do
@@ -1177,17 +895,13 @@ detect_backend() {
       BE_NOTE="node (express/nest; PORT env carries the slot)"
       ;;
     go)
-      # No universal go dev-server convention, but `go run .` runs the main
-      # package in the module dir — a sane default for the common single-main
-      # layout. Most go web apps read the port from $PORT; we export it. Adjust
-      # BACKEND_CMD (e.g. `go run ./cmd/server`) if your main lives elsewhere.
+      # `go run .` is a sane single-main default; most go apps read $PORT, which we export.
       BE_CMD='go run .'
       BE_ENV='PORT=$BACKEND_PORT'
       BE_NOTE="go (go run .; PORT env carries the slot — edit if main is under ./cmd/...)"
       ;;
     rust)
-      # `cargo run` builds and runs the crate's default binary. Most frameworks
-      # (axum/actix/rocket) read the bind port from $PORT; we export it.
+      # `cargo run` runs the default binary; most frameworks read the bind port from $PORT, which we export.
       BE_CMD='cargo run'
       BE_ENV='PORT=$BACKEND_PORT'
       BE_NOTE="rust (cargo run; PORT env carries the slot)"
@@ -1253,9 +967,7 @@ EOF
     echo '# BACKEND_CMD='\''your-server --port $BACKEND_PORT'\'''
     echo '# BACKEND_ENV='\''EXTRA_KEY=value'\'''
   fi
-  # The block above can end on a falsy `[ -n "$BE_ENV" ] && ...` test; without an
-  # explicit success here emit_config would return 1, and `set -e` would abort
-  # the caller (cmd_init) before it printed "wrote ..." or returned 0.
+  # The block above can end on a falsy test; this explicit success stops set -e aborting cmd_init (AGENTS.d/040).
   return 0
 }
 
@@ -1308,17 +1020,7 @@ cmd_init() {
   log "  review it, then: ataegina up"
 }
 
-# ---------------------------------------------------------------------------
-# config: get / set / list / unset / path. Edit ataegina.config.sh from the CLI
-# so the file is essentially never hand-edited. Dispatched early (after config
-# load, before index assignment): it needs the config resolved to report
-# effective values + sources, but it does not need a port slot.
-#
-# Only the WHITELIST of known scalar keys may be set/unset. We deliberately
-# refuse arbitrary keys so `config set` can never inject bash into a file that is
-# later sourced. The hook FUNCTIONS (ate_start_*, ate_stop_*, ate_doctor) are NOT
-# settable here; editing those means opening the file directly.
-# ---------------------------------------------------------------------------
+# config: get/set/list/unset/path, whitelisted scalar keys only so `config set` never injects bash into the sourced file (AGENTS.d/108).
 
 # The settable keys, space-separated. Keep in sync with usage() and the example.
 ATE_CONFIG_KEYS="FRONT_PORT_BASE BACK_PORT_BASE LOG_DIR_BASE REGISTRY_DIR FRONTEND_DIR FRONTEND_CMD FRONTEND_ENV BACKEND_DIR BACKEND_CMD BACKEND_ENV DB_NAME DB_KIND DB_SUFFIX DB_URL_VAR DB_URL_TEMPLATE DB_AUTO_CREATE DB_CREATE_CMD DB_DROP_CMD ATE_BASE_BRANCH ATE_SCOPE_AUTO ATE_PORT_TOOL"
