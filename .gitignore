@@ -27,3 +27,4 @@ worktree-index
 
 # bashcov / SimpleCov coverage output (local only)
 coverage/
+__pycache__/

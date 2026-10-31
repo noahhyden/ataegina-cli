@@ -202,3 +202,13 @@ jobs:
         run: |
           bats -f prints tests/version.bats
           bats tests/index_ports.bats tests/stack_matrix.bats tests/registry_per_repo.bats
+
+  # Context guards: an AGENTS.d rule is one line of 255 chars, and explanation in code is capped at one line and ratcheted against a baseline that may only shrink.
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: An AGENTS.d rule is one line of 255 characters
+        run: python3 .github/scripts/check_agents_rule_length.py
+      - name: Explanation in code is capped at one line
+        run: python3 .github/scripts/check_one_line_comments.py
