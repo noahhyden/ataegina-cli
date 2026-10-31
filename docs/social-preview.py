@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate docs/social-preview.png — the repo's GitHub social preview card.
-
-This is the 1280x640 image uploaded under
-  Settings -> General -> Social preview
-(it is stored by GitHub on upload; it does not need to live in the repo, but we
-keep it here so the card is reproducible).
-
-Requires Pillow (`pip install Pillow`) and the macOS system fonts (SF, Menlo);
-it is rendered at 2x and downsampled for crisp anti-aliasing. Run from anywhere:
-  python3 docs/social-preview.py
-"""
+"""Regenerate docs/social-preview.png (1280x640 GitHub social card); needs Pillow and macOS fonts."""
 import os
 from PIL import Image, ImageDraw, ImageFont
 

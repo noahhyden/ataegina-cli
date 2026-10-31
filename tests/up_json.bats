@@ -42,8 +42,7 @@ EOF
   chmod +x "$BIN/ss"
 }
 
-# Run ataegina capturing stdout in $OUT, stderr in $ERR, exit code in $RC — kept
-# separate so we can assert stdout is pure JSON. $PORT_TOOL/$FAKE_PORT default off.
+# Run ataegina with stdout in $OUT, stderr in $ERR, exit code in $RC so stdout can be asserted pure JSON.
 jrun() {
   local errf; errf="$(mktemp)"
   # `&& RC=0 || RC=$?` keeps a non-zero exit (e.g. 75 under --wait) from tripping

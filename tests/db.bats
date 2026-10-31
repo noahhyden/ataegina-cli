@@ -11,8 +11,7 @@ setup() {
   common_setup
   REPO="$(make_repo "$ATE_TMP/repo")"
   MARK="$ATE_TMP/db-calls.log"
-  # DB_KIND=custom so no per-kind default CLI is assumed; the stub commands write
-  # to $MARK. They reference $ATE_DB_NAME, which ataegina exports per worktree.
+  # DB_KIND=custom assumes no default CLI; stubs write to $MARK and read the exported $ATE_DB_NAME.
   DBCFG=(
     "DB_NAME=myapp"
     "DB_KIND=custom"

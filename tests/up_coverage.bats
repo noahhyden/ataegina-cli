@@ -63,8 +63,7 @@ teardown() { common_teardown; }
 
 @test "up frontend when the shared backend is DOWN falls back to a local backend" {
   cd "$REPO"
-  # Nothing is listening on the base backend port (ATE_PORT_TOOL=none also reports
-  # 'not listening'), so the frontend scope must start a LOCAL backend.
+  # Nothing listens on the base backend port, so the frontend scope must start a LOCAL backend.
   run ate up frontend --scope frontend
   [ "$status" -eq 0 ]
   echo "$output" | grep -qi "shared backend on :54100 is DOWN"

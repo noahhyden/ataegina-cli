@@ -16,8 +16,7 @@ setup() {
 }
 teardown() { common_teardown; }
 
-# Write a DB-enabled config whose create/drop hooks are the fake CLI. $2 is the exit
-# code the fake `create` returns (0 = healthy engine, 1 = broken/unavailable engine).
+# Write a DB-enabled config with the fake CLI; $2 is the exit code `create` returns (0 healthy, 1 broken).
 dbcfg() {
   local dir="$1" create_exit="$2"
   write_config "$dir" \

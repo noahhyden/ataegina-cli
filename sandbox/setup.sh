@@ -1,20 +1,5 @@
 #!/usr/bin/env bash
-# Build a throwaway, fully-isolated playground for exercising THIS repo's ataegina
-# against a real full-stack mock — the interactive companion to the automated
-# integration tests in tests/. Everything lands under sandbox/.work/ (gitignored):
-# an isolated registry, isolated logs, high ports, and a mock git repo whose
-# "servers" are real python listeners, so `up`/`down` drive the actual detached
-# process lifecycle. Your real ~/.config/ataegina and /tmp/ate-wt* are never touched.
-#
-# Usage:
-#   bash sandbox/setup.sh          # (re)build the mock stack under sandbox/.work
-#   source sandbox/.work/env.sh    # isolated env + an `ate` shell function
-#   cd sandbox/.work/mock          # the primary checkout (index 0)
-#   ate up && ate ports && ate down
-#   cd sandbox/.work/mock-a        # a linked worktree (index 1)
-#   ate up
-#
-# Re-run this script anytime to reset to a clean stack. `rm -rf sandbox/.work` to nuke it.
+# Build an isolated playground under sandbox/.work/ (gitignored); usage: bash sandbox/setup.sh, then source sandbox/.work/env.sh.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -84,8 +69,7 @@ CFG
 echo "[sandbox] building mock stack under $WORK"
 mkdir -p "$WORK/data"
 build_repo "$WORK/mock"
-# The config is gitignored, so linked worktrees inherit it via the primary-config
-# fallback (see load_config) — no copy needed. Add two worktrees.
+# The gitignored config reaches linked worktrees via the primary-config fallback, so no copy is needed.
 git -C "$WORK/mock" worktree add -q -b feat-a "$WORK/mock-a"
 git -C "$WORK/mock" worktree add -q -b feat-b "$WORK/mock-b"
 

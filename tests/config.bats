@@ -19,9 +19,7 @@ teardown() { common_teardown; }
   [ "$status" -eq 0 ]
   [ "$output" = "$val" ]
 
-  # The stored line keeps $FRONTEND_PORT and $VAR literal (single-quoted), so
-  # they never expand when the config is sourced. Assert the dollar references
-  # survive verbatim in the file.
+  # The stored line keeps $FRONTEND_PORT and $VAR literal; assert the references survive verbatim.
   grep -qF '$FRONTEND_PORT' "$REPO/ataegina.config.sh"
   grep -qF '$VAR' "$REPO/ataegina.config.sh"
 }

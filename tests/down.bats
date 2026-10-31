@@ -24,9 +24,7 @@ teardown() {
 
 @test "down kills a launched-but-unbound backend via its pidfile and removes the pidfile" {
   cd "$REPO"
-  # `up backend` launches the server (we assert on the pidfile, not its exit
-  # code: with no frontend the final readiness short-circuit makes `up backend`
-  # return nonzero, which is existing behavior unrelated to teardown).
+  # Assert on the pidfile, not exit code: with no frontend `up backend` returns nonzero, unrelated to teardown.
   run ate up backend
 
   pidfile="$ATE_TMP/logs/ate-wt0/backend.pid"
@@ -61,9 +59,7 @@ teardown() {
 
 @test "down --force is accepted and parses the force flag" {
   cd "$REPO"
-  # Nothing is running, so this just exercises the --force flag parse + both-side
-  # teardown path (a foreign-holder reap needs a real listener; that's covered by
-  # the fake-tool integration tier). Must still exit 0 with nothing to stop.
+  # Nothing running: exercises --force parsing and both-side teardown, and must exit 0.
   run ate down --force
   [ "$status" -eq 0 ]
   echo "$output" | grep -qi "nothing to stop"

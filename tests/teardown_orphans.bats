@@ -10,8 +10,7 @@
 
 load helper
 
-# A unique sentinel so we can find (and always clean up) the worker regardless of test
-# outcome. Must not collide with anything else on the box.
+# A unique sentinel so the worker is always found and cleaned up; must not collide with anything else.
 SENTINEL="ate_orphan_sentinel_918273645"
 
 setup()    { common_setup; integration_only; }
@@ -23,11 +22,7 @@ teardown() {
 @test "down reaps a worker child that never holds the port (no orphan leak)" {
   local repo
   repo="$(make_repo "$ATE_TMP/repo")"
-  # Backend launch spawns a detached worker (the sentinel sleep) that never binds a
-  # port, then waits. The launch wrapper is the recorded pid; the worker is its child.
-  # The worker is `bash -c 'sleep 900' <SENTINEL>`: the sentinel rides in argv (so
-  # pgrep -f can find it) without breaking the command. It is backgrounded and never
-  # binds a port; the wrapper `sh -c ... & wait` is the recorded launch pid.
+  # The detached worker is `bash -c 'sleep 900' <SENTINEL>` (sentinel in argv for pgrep -f), never binds a port; the wrapper is the recorded pid.
   write_config "$repo" \
     "BACKEND_DIR='.'" \
     "BACKEND_CMD='bash -c \"sleep 900\" $SENTINEL & wait'"

@@ -13,10 +13,7 @@
 # Absolute path to the ataegina script under test (tests/ lives next to it).
 ATE_SCRIPT="$BATS_TEST_DIRNAME/../ataegina"
 
-# ate: invoke the script under test with a clean, network-free, temp registry
-# environment. Per-test state lives under $ATE_TMP (set in common_setup). We run
-# `bash "$ATE_SCRIPT"` rather than relying on the shebang so the suite is robust
-# wherever bash lives, and so coverage of bash-3.2 behavior is explicit on macOS.
+# ate: run the script under test via `bash "$ATE_SCRIPT"` with a network-free temp registry under $ATE_TMP.
 ate() {
   ATE_REGISTRY_DIR="$ATE_TMP/registry" \
   ATE_PORT_TOOL="${ATE_PORT_TOOL:-none}" \
@@ -54,9 +51,7 @@ common_teardown() {
   return 0
 }
 
-# Create a throwaway git repo with one commit on `main`, echoing its path. The
-# directory layout (frontend/, backend/) gives scope detection something to bite
-# on. Git identity is set locally so the suite needs no global git config.
+# Create a throwaway git repo with one commit on `main` and frontend/ + backend/ dirs, echoing its path.
 make_repo() {
   local dir="$1"
   mkdir -p "$dir"
@@ -68,8 +63,7 @@ make_repo() {
   echo "fe" > "$dir/frontend/app.js"
   echo "be" > "$dir/backend/server.py"
   echo "root" > "$dir/README.md"
-  # The local config is git-ignored in real use; ignore it here too so it never
-  # registers as an untracked "other" path that would force scope=both.
+  # Ignore the local config here as in real use, or it registers as an untracked path that forces scope=both.
   printf 'ataegina.config.sh\n' > "$dir/.gitignore"
   git -C "$dir" add -A
   git -C "$dir" commit -q -m "init"
@@ -112,13 +106,10 @@ write_config() {
 # expectation into a real failure wherever they appear in the body.
 refute_output_has() { case "${output:-}" in *"$1"*) return 1 ;; *) return 0 ;; esac; }
 refute_alive()      { if kill -0 "$1" 2>/dev/null; then return 1; fi; return 0; }
-# Generic: run CMD…; FAIL (return 1) if it SUCCEEDS. For negative assertions on any
-# command (e.g. `refute grep -q PATTERN FILE`, `refute listening PORT`) without the
-# `! cmd` set -e-exemption footgun.
+# Run CMD and FAIL if it SUCCEEDS, avoiding the `! cmd` set -e exemption footgun.
 refute()            { if "$@"; then return 1; fi; return 0; }
 
-# Reap every process whose command line contains the (specific, non-empty) tag.
-# Kills per-PID; refuses an unsafe tag with a loud message and no kill.
+# Reap every process whose command line contains the specific non-empty tag; an unsafe tag is refused with no kill.
 ate_reap_tag() {
   local tag="${1:-}" pid
   if [ -z "$tag" ] || [ "${#tag}" -lt 8 ]; then
@@ -131,18 +122,14 @@ ate_reap_tag() {
   done
 }
 
-# Count live processes whose command line contains the (specific, non-empty) tag.
-# Refuses an unsafe tag by returning 0 (never a bare `pgrep -f ""`).
+# Count live processes containing the specific non-empty tag; an unsafe tag returns 0, never a bare `pgrep -f ""`.
 ate_count_tag() {
   local tag="${1:-}"
   if [ -z "$tag" ] || [ "${#tag}" -lt 8 ]; then echo 0; return 0; fi
   pgrep -f "$tag" 2>/dev/null | grep -c '^[0-9]' || true
 }
 
-# True (0) iff some live process whose command line contains $child_tag has a
-# PARENT whose command line contains $parent_tag — i.e. a real tree-depth edge.
-# Lets a test assert genuine process-tree DEPTH rather than mere breadth. Both
-# tags are required non-empty + specific; returns 1 (false) otherwise.
+# True iff a process with $child_tag has a PARENT with $parent_tag (real tree depth); both tags must be non-empty and specific.
 ate_tag_is_child_of() {
   local child_tag="${1:-}" parent_tag="${2:-}" cpid ppid pargs
   { [ -n "$child_tag" ] && [ "${#child_tag}" -ge 8 ] \

@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Build the throwaway sample repo the README demo tapes record against.
-# Creates a full-stack git repo (frontend/ = Next.js, backend/ = Express) plus
-# an empty registry, so `vhs docs/demo.tape` / `vhs docs/agents.tape` are
-# reproducible on any machine. Everything lives under $DEMO_ROOT (default
-# /tmp/ataegina-demo); re-running wipes and rebuilds it.
+# Build the throwaway sample repo (Next.js + Express) the README demo tapes record against, under $DEMO_ROOT; re-running wipes it.
 set -euo pipefail
 
 DEMO_ROOT="${DEMO_ROOT:-/tmp/ataegina-demo}"
@@ -13,8 +9,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 rm -rf "$DEMO_ROOT"
 mkdir -p "$APP/frontend" "$APP/backend" "$DEMO_ROOT/.reg" "$DEMO_ROOT/bin"
 
-# Install this repo's launcher at a fixed path so the tapes can put it on PATH
-# without hardcoding a machine-specific location.
+# Install this repo's launcher at a fixed path so the tapes can put it on PATH.
 cp "$REPO/ataegina" "$DEMO_ROOT/bin/ataegina"
 chmod +x "$DEMO_ROOT/bin/ataegina"
 

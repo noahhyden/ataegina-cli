@@ -54,9 +54,7 @@ teardown() { common_teardown; }
   ( cd "$wtA" && ate ports >/dev/null )   # index 1
   ( cd "$wtB" && ate ports >/dev/null )   # index 2
 
-  # Find the per-repo registry file and drop the index-1 row, creating a gap.
-  # (Match on the leading index column; the stored path may be symlink-resolved,
-  # so matching on the path string is unreliable on macOS where /tmp -> /private.)
+  # Drop the index-1 row to create a gap; match the leading index column since stored paths may be symlink-resolved on macOS.
   reg="$(find "$ATE_TMP/registry/repos" -type f | head -n1)"
   [ -n "$reg" ]
   grep -v "^1$(printf '\t')" "$reg" > "$reg.tmp" || true

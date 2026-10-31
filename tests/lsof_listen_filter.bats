@@ -21,9 +21,7 @@ setup() {
 }
 teardown() { common_teardown; }
 
-# Fake lsof. $FAKE_LISTEN_PORT has a real listener (pid 88888, shown with or without
-# the state filter). $FAKE_CLIENT_PORT has ONLY a connected client (pid 99999) and
-# NO listener — real lsof shows it without -sTCP:LISTEN and hides it with it.
+# Fake lsof: FAKE_LISTEN_PORT has a listener (pid 88888); FAKE_CLIENT_PORT has only a client (pid 99999), hidden by -sTCP:LISTEN.
 make_fake_lsof() {
   cat > "$BIN/lsof" <<'EOF'
 #!/usr/bin/env bash

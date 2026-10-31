@@ -66,14 +66,7 @@ jobs:
       - name: Run the test suite
         run: bats tests/
 
-  # ---------------------------------------------------------------------------
-  # Integration: the opt-in tests that start REAL processes (python/node/go dev
-  # servers, real up/down lifecycle, the two-worktree end-to-end). Gated behind
-  # ATE_TEST_INTEGRATION so the unit jobs above stay hermetic and fast. This job
-  # stays network-free — it does NOT set ATE_TEST_DOCKER, so the docker/live-DB
-  # tests (postgres/mysql) remain local-only and nothing is pulled here. The
-  # runtimes (python3, node, go) are preinstalled on the runner.
-  # ---------------------------------------------------------------------------
+  # Integration: opt-in real-process tests behind ATE_TEST_INTEGRATION; network-free, ATE_TEST_DOCKER stays unset.
   integration:
     runs-on: ubuntu-latest
     steps:
@@ -89,12 +82,7 @@ jobs:
           ATE_TEST_INTEGRATION: "1"
         run: bats tests/
 
-  # ---------------------------------------------------------------------------
-  # Assert the macOS job actually exercises the system bash 3.2 (the floor the
-  # project targets). The Homebrew bash 5 is NOT on PATH as `bash` by default on
-  # the macOS runner, but we make the requirement explicit: /bin/bash must be a
-  # 3.x, and a smoke run of the suite under it must pass.
-  # ---------------------------------------------------------------------------
+  # Assert the macOS job really runs system /bin/bash 3.x, the project's floor.
   macos-bash32:
     runs-on: macos-latest
     steps:
@@ -118,11 +106,7 @@ jobs:
         # Putting /bin first guarantees that inner `bash` is the 3.2 system one.
         run: PATH="/bin:$PATH" bats tests/
 
-  # ---------------------------------------------------------------------------
-  # Release verification: the published checksum must match the committed script,
-  # and (on a tag build, or whenever a tag is reachable) the VERSION= line must
-  # match the latest tag. Skips the tag check gracefully when no tag exists.
-  # ---------------------------------------------------------------------------
+  # Release verification: published checksum must match the script, and VERSION must match the latest tag.
   release-verify:
     runs-on: macos-latest
     steps:
@@ -132,11 +116,7 @@ jobs:
       - name: Checksum matches the committed ataegina
         run: shasum -a 256 -c ataegina.sha256
       - name: VERSION matches the latest tag (skipped if no tag)
-        # On a TAG build the agreement is a hard gate: the VERSION= line must
-        # match the tag being released. On non-tag builds (ordinary main pushes /
-        # PRs) the comparison is informational only, because VERSION is bumped in
-        # the commit BEFORE the release tag is cut, so a transient mismatch there
-        # is expected and must not fail CI.
+        # On a tag build VERSION must equal the tag (hard gate); on non-tag builds a mismatch is informational only.
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}

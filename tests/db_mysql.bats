@@ -10,9 +10,7 @@ MY_PW="rootpw"
 
 myq() { docker exec "$MY_CONTAINER" mysql -uroot -p"$MY_PW" -N -B -e "$1" 2>/dev/null; }
 db_exists() { myq "SELECT schema_name FROM information_schema.schemata WHERE schema_name='$1'"; }
-# Real readiness: mysqladmin ping answers BEFORE the server accepts authenticated
-# DDL, so probe with an actual query. An env that never gets here -> tests SKIP
-# (never false-fail).
+# Probe with a real query: mysqladmin ping answers before DDL works; an env that never gets here SKIPs.
 my_ready() { docker exec "$MY_CONTAINER" mysql -uroot -p"$MY_PW" -N -B -e "SELECT 1" >/dev/null 2>&1; }
 
 setup_file() {

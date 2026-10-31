@@ -72,9 +72,7 @@ teardown() { common_teardown; }
 
 @test "exec protects a command whose name starts with a dash" {
   cd "$REPO"
-  # A dash-named command must be treated as a COMMAND (attempted, then
-  # not-found = 127), never parsed as an ataegina/exec option (which would fail
-  # with an "invalid option" usage error, exit 2). This is why exec emits `--`.
+  # A dash-named command is a COMMAND (not-found = 127), never an exec option (usage error, exit 2); exec emits `--`.
   run ate exec -- -no-such-dash-cmd-xyz
   [ "$status" -eq 127 ]
   refute_output_has "invalid option"

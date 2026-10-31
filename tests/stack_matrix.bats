@@ -9,9 +9,7 @@ load helper
 setup()    { common_setup; }
 teardown() { common_teardown; }
 
-# A git repo with nothing but a README (no frontend/backend dirs), so each test
-# scaffolds exactly the stack it means to detect. No commit needed: detection reads
-# the working tree and `git rev-parse` works in an empty repo.
+# A git repo with only a README, so each test scaffolds exactly the stack it means to detect; no commit needed.
 bare_repo() {
   local dir="$1"
   mkdir -p "$dir"
@@ -23,9 +21,7 @@ bare_repo() {
   printf '%s\n' "$dir"
 }
 
-# ---------------------------------------------------------------------------
 # Frontends
-# ---------------------------------------------------------------------------
 
 @test "frontend: Next.js detected -> next dev on the slot port" {
   repo="$(bare_repo "$ATE_TMP/fe-next")"
@@ -106,9 +102,7 @@ bare_repo() {
   echo "$output" | grep -qi 'unrecognized frontend'
 }
 
-# ---------------------------------------------------------------------------
 # Backends
-# ---------------------------------------------------------------------------
 
 @test "backend: uv (pyproject + uv.lock + main.py) -> uv run main.py" {
   repo="$(bare_repo "$ATE_TMP/be-uv")"
@@ -220,9 +214,7 @@ bare_repo() {
   echo "$output" | grep -q 'uv run main.py'
 }
 
-# ---------------------------------------------------------------------------
 # Databases (per-worktree derivation across every DB_KIND)
-# ---------------------------------------------------------------------------
 
 # primary keeps the unsuffixed name; a worktree gets NAME + SUFFIX + index.
 @test "db: postgres URL template derives per worktree" {

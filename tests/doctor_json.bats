@@ -48,8 +48,7 @@ drun() {
   cd "$REPO"
   drun doctor --json
   [ "$RC" -eq 0 ]
-  # A healthy hermetic run has several ok checks and at least one warn (port tool
-  # is 'none', and the launcher is not on PATH under a relative invocation).
+  # A healthy hermetic run has several ok checks and at least one warn (port tool 'none', launcher not on PATH).
   if command -v python3 >/dev/null 2>&1; then
     [ "$(jget "$OUT" 'd["summary"]["ok"]')" -ge 1 ]
     [ "$(jget "$OUT" 'd["summary"]["warn"]')" -ge 1 ]

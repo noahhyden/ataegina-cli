@@ -32,8 +32,7 @@ run_doctor() {
 
 @test "doctor: a worktree with no registry entry yet is warned" {
   cd "$REPO"
-  # A forced index is returned by resolve_index WITHOUT registering it, so this
-  # tree has no registry row — exercising the 'none for this tree yet' branch.
+  # A forced index is not registered, so this tree has no registry row ('none for this tree yet').
   run_doctor ATE_INDEX=7
   echo "$output" | grep -qi "registry entry: none for this tree yet"
 }
@@ -90,8 +89,7 @@ run_doctor() {
 @test "doctor: launcher reachable as 'ataegina' under a different invoked name" {
   local bin="$ATE_TMP/bin"; mkdir -p "$bin"
   cp "$ATE_SCRIPT" "$bin/ataegina"; chmod +x "$bin/ataegina"
-  # A uniquely-named invocation (not on PATH) so `command -v <self>` misses but
-  # `command -v ataegina` hits -> the "on PATH as ataegina" branch.
+  # A uniquely-named invocation not on PATH: `command -v <self>` misses, `command -v ataegina` hits.
   cp "$ATE_SCRIPT" "$ATE_TMP/ate-cov-probe"; chmod +x "$ATE_TMP/ate-cov-probe"
   cd "$REPO"
   run env PATH="$bin:$PATH" ATE_REGISTRY_DIR="$ATE_TMP/registry" ATE_PORT_TOOL=none \

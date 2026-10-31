@@ -30,8 +30,7 @@ wt_logdir() { printf '%s\n' "$ATE_TMP/logs/ate-wt1"; }
   bash -c "sleep 300" "$MARK" &
   innocent=$!
 
-  # Fabricate a stale pidfile that points at it with a NON-matching start-time,
-  # i.e. as if the original owner had died and this pid got recycled.
+  # Fabricate a stale pidfile with a NON-matching start-time, as if the owner died and the pid was recycled.
   ld="$(wt_logdir)"; mkdir -p "$ld"
   echo "$innocent" > "$ld/backend.pid"
   echo "Thu Jan  1 00:00:00 1970" > "$ld/backend.pidstart"

@@ -86,11 +86,7 @@ doctor_scope() {
 }
 
 @test "ATE_BASE_BRANCH selects the ref scope diffs against" {
-  # Make a second base branch `dev` that already contains a backend change, then
-  # branch the worktree off dev and add a frontend change. Diffed against dev the
-  # scope is frontend (only the new FE change); diffed against main it would be
-  # both (FE + the BE change dev carries). This proves the base resolves to
-  # ATE_BASE_BRANCH.
+  # Branch off `dev` (which carries a backend change) and add a frontend change: scope is frontend vs dev, both vs main.
   git -C "$REPO" checkout -q -b dev
   echo "dev-only be" >> "$REPO/backend/server.py"
   git -C "$REPO" commit -q -am "be change on dev"
