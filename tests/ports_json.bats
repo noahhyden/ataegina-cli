@@ -26,8 +26,7 @@ setup() {
 }
 teardown() { common_teardown; }
 
-# Parse the output as JSON with python3 when present (proves it is real JSON, not
-# just grep-matching text). A no-op skip-of-assertion when python3 is absent.
+# Parse with python3 when present to prove it is real JSON; a no-op when python3 is absent.
 assert_valid_json() {
   command -v python3 >/dev/null 2>&1 || return 0
   printf '%s' "$1" | python3 -c 'import json,sys; json.load(sys.stdin)'
@@ -88,11 +87,7 @@ assert_valid_json() {
 }
 
 @test "ports --json repo_root is the worktree path, JSON-escaped" {
-  # A path with a space is a legal JSON string (no escaping needed) but must
-  # round-trip intact; proves repo_root is emitted through the escaper. Compare
-  # against the git-resolved toplevel (what ataegina uses for TREE), not the raw
-  # mktemp path: on macOS $TMPDIR is a symlink (/var -> /private/var) that git
-  # resolves, so the raw path would never match.
+  # A path with a space must round-trip intact; compare against git's resolved toplevel, not the raw mktemp path (macOS symlink).
   spaced="$ATE_TMP/repo dir"
   R="$(make_repo "$spaced")"
   EXP="$(cd "$R" && git rev-parse --show-toplevel)"
@@ -104,9 +99,7 @@ assert_valid_json() {
 }
 
 @test "ports --json escapes quotes and backslashes in repo_root (stays valid JSON)" {
-  # A path containing a double-quote and a backslash would produce INVALID JSON if
-  # emitted raw; python's json.load must still accept it. Locks the escaper (and
-  # its backslash-first ordering). Linux permits both chars in a directory name.
+  # A double-quote and backslash in the path would be INVALID JSON if emitted raw; locks the escaper's backslash-first order.
   tricky="$ATE_TMP/re\\po\"x"
   R="$(make_repo "$tricky")"
   EXP="$(cd "$R" && git rev-parse --show-toplevel)"
@@ -114,8 +107,7 @@ assert_valid_json() {
   run ate ports --json
   [ "$status" -eq 0 ]
   assert_valid_json "$output"
-  # If python3 is present, confirm the decoded repo_root equals the real path
-  # (git-resolved, so it matches on macOS's symlinked $TMPDIR too).
+  # With python3, confirm the decoded repo_root equals the git-resolved real path.
   if command -v python3 >/dev/null 2>&1; then
     got="$(printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["repo_root"])')"
     [ "$got" = "$EXP" ]

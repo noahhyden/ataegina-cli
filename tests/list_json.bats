@@ -34,9 +34,7 @@ assert_valid_json() {
 # Register a worktree (assign its index) by running a read command from inside it.
 register() { ( cd "$1" && ate ports >/dev/null ); }
 
-# The path ataegina records/reports for a tree is git's resolved toplevel, which on
-# macOS differs from the raw mktemp path ($TMPDIR is /var -> /private/var, a symlink
-# git resolves). Compare JSON repo_root / human paths against THIS, never the raw dir.
+# Compare paths against git's resolved toplevel, never the raw mktemp dir ($TMPDIR is a symlink on macOS).
 resolved() { ( cd "$1" && git rev-parse --show-toplevel ); }
 
 make_fake_ss() {

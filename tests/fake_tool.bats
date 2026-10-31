@@ -26,8 +26,7 @@ setup() {
   if command -v lsof >/dev/null 2>&1; then export ATE_PORT_TOOL=lsof
   elif command -v ss >/dev/null 2>&1; then export ATE_PORT_TOOL=ss
   else skip "no port tool (lsof/ss) available"; fi
-  # Per-test port bases (high + offset by test number) so no two tests ever
-  # contend for the same socket — kills sequential-reuse flakiness dead.
+  # Per-test port bases offset by test number so no two tests contend for a socket.
   FE_BASE=$((46100 + BATS_TEST_NUMBER))
   BE_BASE=$((47100 + BATS_TEST_NUMBER))
 }
@@ -46,21 +45,14 @@ listening() {
 }
 wait_listening() { local p="$1" i=0; while [ "$i" -lt 40 ]; do listening "$p" && return 0; sleep 0.25; i=$((i+1)); done; return 1; }
 wait_free()      { local p="$1" i=0; while [ "$i" -lt 40 ]; do listening "$p" || return 0; sleep 0.25; i=$((i+1)); done; return 1; }
-# Gating "port is NOT listening" — see refute_* in helper.bash for why `! listening`
-# would be a silent no-op mid-test.
+# Gating 'port is NOT listening': see refute_* in helper.bash, since `! listening` is a silent no-op mid-test.
 refute_listening() { if listening "$1"; then return 1; fi; return 0; }
 
-# Count live processes carrying this test's tag (the whole mock tree), via the
-# guarded helper (refuses an empty/short tag, so no bare `pgrep -f ""` is possible).
+# Count live processes with this test's tag via the guarded helper, which refuses an empty/short tag.
 tree_count() { ate_count_tag "${TAG:-}"; }
 wait_tree_gone() { local i=0; while [ "$i" -lt 40 ]; do [ "$(tree_count)" = 0 ] && return 0; sleep 0.25; i=$((i+1)); done; return 1; }
 
-# Configure a repo whose backend is the fake tool, carrying $extra_env into it.
-# The tag is passed as a trailing ARGV token (not just an env var) so EVERY node
-# in the launched tree — the sh/bash wrapper included, not only the workers and
-# the python listener — carries it in its command line. Without this the wrapper
-# (the one process that can ignore SIGTERM) is invisible to pgrep, which would
-# make the SIGKILL-escalation test a false pass.
+# Configure a repo whose backend is the fake tool; the tag rides as a trailing ARGV token so pgrep sees the wrapper too.
 mock_repo() {
   local repo="$1"; shift
   make_repo "$repo" >/dev/null
@@ -114,9 +106,7 @@ mock_repo() {
 @test "fake: up both binds frontend + backend on distinct ports; down both reaps both" {
   local repo="$ATE_TMP/repo"
   make_repo "$repo" >/dev/null
-  # Same fake tool on BOTH sides; ataegina exports PORT per side (FRONTEND_PORT vs
-  # BACKEND_PORT), so each instance binds its own slot. Distinct sub-tags (both
-  # contain $TAG, so the tag reap/count still sees them) keep the sides separable.
+  # Same fake tool on BOTH sides; ataegina exports PORT per side, and distinct sub-tags (both containing $TAG) keep them separable.
   write_config "$repo" \
     "FRONT_PORT_BASE=$FE_BASE" "BACK_PORT_BASE=$BE_BASE" \
     "FRONTEND_DIR='.'" "FRONTEND_CMD='bash \"$MOCK\" ${TAG}-fe'" "FRONTEND_ENV='MOCK_TAG=${TAG}-fe'" \
@@ -167,11 +157,7 @@ mock_repo() {
   local repo="$ATE_TMP/repo"
   mock_repo "$repo" "MOCK_TAG=$TAG"
   cd "$repo"
-  # Pre-occupy the backend slot with an INDEPENDENT holder ataegina never launched
-  # (a separate mock carrying a squatter sub-tag, so teardown's tag reap still
-  # catches it). ataegina now cross-checks the port holder against its own launch
-  # records: it must NOT imply success ("already up") for a process it never
-  # started, and must NOT launch a SECOND server on top of the held slot.
+  # Pre-occupy the backend slot with an independent holder: ataegina must NOT report 'already up' nor launch a SECOND server.
   MOCK_TAG="${TAG}-squat" MOCK_PORT="$BE_BASE" bash "$MOCK" "${TAG}-squat" >/dev/null 2>&1 &
   wait_listening "$BE_BASE"
   local before; before="$(tree_count)"     # the squatter tree (its tag contains $TAG)
@@ -187,8 +173,7 @@ mock_repo() {
   local repo="$ATE_TMP/repo"
   mock_repo "$repo" "MOCK_TAG=$TAG"
   cd "$repo"
-  # A squatter ataegina never launched holds the backend slot. Plain `down` must
-  # NOT kill it (it is not ataegina's process); `down --force` clears the slot.
+  # Plain `down` must NOT kill a squatter ataegina never launched; `down --force` clears the slot.
   MOCK_TAG="${TAG}-squat" MOCK_PORT="$BE_BASE" bash "$MOCK" "${TAG}-squat" >/dev/null 2>&1 &
   wait_listening "$BE_BASE"
 
@@ -204,14 +189,10 @@ mock_repo() {
 
 @test "fake: re-up DURING a slow boot does not double-launch (boot-window idempotency)" {
   local repo="$ATE_TMP/repo"
-  # Boot 14s is well beyond the ~8s readiness window, so the first `up` returns
-  # "still starting" with the port NOT yet bound — the exact window in which a
-  # second `up` used to double-launch (guarding only on the port), orphaning the
-  # first wrapper and overwriting its pidfile so `down` could not reap it.
+  # Boot 14s outlasts the ~8s readiness window, so a second `up` used to double-launch and orphan the first wrapper.
   mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_BOOT_DELAY=14"
   cd "$repo"
-  # Count only launch WRAPPERS (the `…/mockserver.sh <tag>` process + its sh parent),
-  # not the eventual listener — so this measures how many servers were launched.
+  # Count only launch WRAPPERS (not the listener), which measures how many servers were launched.
   wrapper_count() { ate_count_tag "mockserver.sh $TAG"; }
 
   run ate up backend --scope backend
@@ -234,11 +215,7 @@ mock_repo() {
   local repo="$ATE_TMP/repo"
   mock_repo "$repo" "MOCK_TAG=$TAG"
   cd "$repo"
-  # Simulate a recorded launch we cannot prove is ours: a LIVE pid in backend.pid but
-  # an EMPTY backend.pidstart (as happens when the launch pid dies before its
-  # start-time can be recorded). Such a stale pid may since have been reused by an
-  # unrelated process, so it is NOT proof of an in-flight launch — `up` must relaunch,
-  # not refuse with "already starting". The foreign pid carries $TAG so teardown reaps it.
+  # A LIVE pid with an EMPTY backend.pidstart is not proof of an in-flight launch, so `up` must relaunch, not refuse.
   local ld="$ATE_TMP/logs/ate-wt0"; mkdir -p "$ld"
   ( exec -a "${TAG}-foreign" sleep 60 ) &
   echo "$!" > "$ld/backend.pid"
@@ -249,9 +226,7 @@ mock_repo() {
   refute_output_has "already starting"       # must not false-block on an unverifiable record
   wait_listening "$BE_BASE"                    # a real server actually came up
 
-  # Cleanup only: `ate down` reaps the real server; the intentional foreign sleep
-  # (which carries $TAG so teardown reaps it) is NOT ataegina's to kill, so no
-  # tree-gone assertion here — that would (correctly) never reach zero.
+  # Cleanup only: the foreign sleep (reaped via $TAG) is not ataegina's to kill, so no tree-gone assertion.
   ate down backend >/dev/null 2>&1 || true
 }
 
@@ -264,11 +239,7 @@ mock_repo() {
   [ "$status" -eq 0 ]
   wait_listening "$BE_BASE"
 
-  # Simulate a CRASH: kill the whole server tree out-of-band (not via `ate down`),
-  # so the recorded pidfile is left behind pointing at a now-dead launch pid — the
-  # case _ate_launch_in_progress must treat as "no launch in flight" so a fresh
-  # `up` recovers. (If the guard over-blocked here, up would say "already starting"
-  # and never relaunch, and wait_listening below would fail.)
+  # Simulate a CRASH: kill the tree out-of-band so a stale pidfile remains and a fresh `up` must recover, not say 'already starting'.
   ate_reap_tag "$TAG"
   wait_free "$BE_BASE"
 
@@ -314,10 +285,7 @@ mock_repo() {
 
 @test "fake: a daemonize-style start (wrapper exits before the child binds) is not reported FAILED" {
   local repo="$ATE_TMP/repo"
-  # Wrapper exits at 0; the (orphaned) listener binds 1.5s later. The recorded
-  # launch pid is dead before the port is up — a dead launcher is NOT proof of
-  # failure when it forked the real server (daemonize). Readiness must give the
-  # port a grace window instead of declaring FAILED the instant the pid is gone.
+  # Wrapper exits at 0 and the listener binds 1.5s later: a dead launcher is NOT proof of failure, so readiness needs a grace window.
   mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_WRAPPER_EXITS=1; MOCK_WRAPPER_EXIT_DELAY=0; MOCK_LISTENER_BIND_DELAY=1.5"
   cd "$repo"
 
@@ -360,9 +328,7 @@ mock_repo() {
   [ "$status" -eq 0 ]
   wait_listening "$BE_BASE"
   [ "$(tree_count)" -ge 5 ]   # wrapper + 2 workers + 2 grandchildren + listener
-  # Prove the tree really has DEPTH (grandchild's parent is a worker, not the
-  # wrapper) — otherwise this degrades into a breadth-only test and ate_pid_tree's
-  # descent is never exercised.
+  # Prove the tree has real DEPTH (grandchild's parent is a worker), else this degrades into a breadth-only test.
   ate_tag_is_child_of "${TAG}-grandchild" "${TAG}-worker"
 
   ate down backend
@@ -382,8 +348,7 @@ mock_repo() {
   wait_listening "$BE_BASE"
 
   ate down backend
-  # Polite SIGTERM is ignored by the wrapper; ataegina must escalate. Port freed
-  # and tree gone are the observable proof the escalation worked.
+  # SIGTERM is ignored by the wrapper, so ataegina must escalate; freed port and gone tree prove it did.
   wait_free "$BE_BASE"
   wait_tree_gone
   [ "$(tree_count)" = 0 ]
@@ -411,8 +376,7 @@ mock_repo() {
 
   run ate move 5                           # relocate while it is still starting
   [ "$status" -eq 0 ]
-  # move must reap the old, still-booting server via its pidfile (it never bound a
-  # port, so a port-only teardown would leak it on the old slot).
+  # move must reap the old still-booting server via its pidfile; a port-only teardown would leak it.
   wait_tree_gone
   [ "$(tree_count)" = 0 ]
 }
@@ -428,12 +392,7 @@ mock_repo() {
   [ "$status" -eq 0 ]
   wait_listening "$BE_BASE"
 
-  # Deterministically wait until the pid ataegina RECORDED at launch is dead, so
-  # `down` must reap via the port holder alone. This is the case that aborted down
-  # under `set -e`+`pipefail`: `ps` on a dead pid fails the pipeline in
-  # ate_pid_starttime, failing the `got="$(...)"` assignment and killing down
-  # before it reaped anything (leaking the port). Waiting for the death makes the
-  # regression deterministic instead of racing the wrapper's exit.
+  # Wait until the recorded launch pid is dead so `down` reaps via the port holder alone (a dead-pid `ps` once aborted down under set -e+pipefail).
   local pidfile="$ATE_TMP/logs/ate-wt0/backend.pid" lpid i=0
   lpid="$(cat "$pidfile" 2>/dev/null || true)"
   [ -n "$lpid" ]
@@ -467,9 +426,7 @@ mock_repo() {
 
 @test "fake: a BACKEND_ENV value with spaces and '=' (double-quoted) reaches the process intact" {
   local repo="$ATE_TMP/repo" out="$ATE_TMP/env.out"
-  # ataegina parses *_ENV via `eval "export $(… | tr '\n;' ' ')"`. A double-quoted
-  # value must survive that eval with its spaces and embedded '=' intact — the
-  # realistic case being a flag string or a URL with query params.
+  # A double-quoted *_ENV value must survive ataegina's eval with spaces and embedded '=' intact.
   mock_repo "$repo" "MOCK_TAG=$TAG; MOCK_ENV_OUT=$out; MOCK_CUSTOM=\"hello world=x&y=z\""
   cd "$repo"
 

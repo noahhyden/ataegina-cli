@@ -1,27 +1,5 @@
 #!/bin/sh
-# ataegina installer. One command, sudo-free, single readable file.
-#
-#   curl -fsSL https://raw.githubusercontent.com/noahhyden/ataegina-cli/<ref>/install.sh | sh
-#
-# What it does: resolves the latest published release tag, downloads that tag's
-# `ataegina` script, verifies its SHA-256 (when a checksum is published),
-# bash-parse-checks it, and installs it to ~/.local/bin/ataegina (chmod +x). No
-# sudo, ever. If the install dir is not on PATH it prints the exact line to add
-# to your shell rc; it never edits rc files for you.
-#
-# It is deliberately small so you can read it before running it. The whole tool
-# is one bash file with no build step; there is nothing hidden here.
-#
-# Overridable via env (mirrors the conventions `ataegina update` uses, so this
-# is testable against a local file:// stub):
-#   ATE_RELEASES_URL  the "latest release" JSON feed (default: GitHub API)
-#   ATE_RAW_BASE      base for raw files; per-tag script is <base>/<tag>/ataegina
-#   ATE_REF           pin a specific ref/tag to install (skips release lookup)
-#   ATE_DEFAULT_REF   fallback ref when no release is found (default: main)
-#   ATE_BIN / PREFIX  install dir (default: ~/.local/bin)
-#   GH_TOKEN          optional GitHub token, sent as a bearer to the feed
-#
-# POSIX sh; no bashisms, no GNU-only flags.
+# ataegina installer: sudo-free, verifies SHA-256, installs to ~/.local/bin; env knobs ATE_RELEASES_URL/ATE_RAW_BASE/ATE_REF/ATE_BIN/PREFIX; POSIX sh only.
 
 set -eu
 
@@ -58,9 +36,7 @@ fi
 # bash is needed to parse-check the downloaded script (it is a bash program).
 command -v bash >/dev/null 2>&1 || die "need bash to verify the downloaded script; not found."
 
-# Fetch URL ($1) to stdout. Short timeout ($2, seconds; default 20). Returns the
-# fetch tool's exit code (nonzero on any network/HTTP error). file:// works with
-# both curl and wget, which is what the local-stub tests rely on.
+# Fetch URL ($1) to stdout with timeout ($2, default 20s); returns the fetch tool's nonzero exit on any error.
 fetch() {
   url="$1"
   timeout="${2:-20}"
@@ -79,8 +55,7 @@ fetch() {
   fi
 }
 
-# Compute the SHA-256 of a file ($1), printing just the lowercase hex digest.
-# Detects shasum (-a 256) then sha256sum. Nonzero if neither is available.
+# Print the lowercase SHA-256 hex of file $1 via shasum or sha256sum; nonzero if neither exists.
 compute_sha256() {
   f="$1"
   if command -v shasum >/dev/null 2>&1; then
@@ -94,9 +69,7 @@ compute_sha256() {
 
 # --- resolve which ref to install --------------------------------------------
 
-# ATE_REF pins a ref explicitly. Otherwise resolve the latest release tag from
-# the feed; if that fails (no release yet, or unreachable), fall back to
-# DEFAULT_REF so a repo without releases still installs from its default branch.
+# ATE_REF pins a ref; otherwise use the latest release tag, falling back to DEFAULT_REF when none resolves.
 resolve_ref() {
   if [ -n "${ATE_REF:-}" ]; then
     printf '%s\n' "$ATE_REF"
@@ -186,10 +159,7 @@ say "installed ataegina $INSTALLED_VER to $DEST"
 
 # --- man page (best-effort; never fatal) -------------------------------------
 
-# Install the man page alongside the script so `man ataegina` works. This is
-# strictly optional: any failure (page not published for this ref, no writable
-# man dir) is a soft note, never an error — the tool itself is already installed.
-# Man dir: ATE_MAN wins, then PREFIX/share/man, then ~/.local/share/man.
+# Man page install is optional: any failure is a soft note, never an error.
 if [ -n "${ATE_MAN:-}" ]; then
   MAN_DIR="$ATE_MAN"
 elif [ -n "${PREFIX:-}" ]; then

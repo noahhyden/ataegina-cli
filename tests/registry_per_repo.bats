@@ -53,8 +53,7 @@ teardown() { common_teardown; }
   wtA="$(add_worktree "$repoA" wt)"
   wtB="$(add_worktree "$repoB" wt)"
 
-  # With a single shared registry, the two worktrees share one index space:
-  # the second one to register lands on index 2, not 1.
+  # The two worktrees share one index space, so the second lands on index 2, not 1.
   cd "$wtA"
   run env ATE_REGISTRY="$shared" ATE_PORT_TOOL=none \
     LOG_DIR_BASE="$ATE_TMP/logs/ate-wt" bash "$ATE_SCRIPT" ports

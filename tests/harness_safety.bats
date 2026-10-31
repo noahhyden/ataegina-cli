@@ -9,11 +9,7 @@
 
 load helper
 
-# Rule: any variable used as a `-f` pattern to the process killers must be assigned
-# at FILE SCOPE (column 0), which guarantees it is non-empty in teardown regardless
-# of whether setup() bailed out on a skip. A var assigned only inside setup() (the
-# exact original bug) is rejected. Reaping via the guarded ate_reap_tag/ate_count_tag
-# helpers is always fine — they refuse an empty/short tag themselves.
+# Any variable used as a `-f` pattern to a process killer must be assigned at FILE SCOPE so teardown sees it non-empty even after a skip.
 @test "harness safety: every variable pattern-kill uses a file-scope (never-empty) tag" {
   local f line var offenders=""
   for f in "$BATS_TEST_DIRNAME"/*.bats; do
@@ -33,8 +29,7 @@ load helper
   fi
 }
 
-# Rule: the shared reaper/counter helpers must refuse an empty or too-short tag, so
-# a broad empty-pattern match can never reach the killer even if a caller passes "".
+# The shared reaper/counter helpers must refuse an empty or too-short tag so an empty pattern never reaches the killer.
 @test "harness safety: the reaper/counter helpers refuse an empty/short tag" {
   local h="$BATS_TEST_DIRNAME/helper.bash"
   grep -q 'ate_reap_tag()'  "$h"
@@ -43,9 +38,7 @@ load helper
   [ "$(grep -c '"${#tag}" -lt 8' "$h")" -ge 2 ]
 }
 
-# Rule: the fake-tool suite (the file that carried the original bug) must not call
-# the process killers by pattern directly — it routes everything through the
-# guarded helpers. This keeps the dangerous primitive in exactly one audited place.
+# fake_tool.bats must not call the process killers by pattern directly; it routes through the guarded helpers.
 @test "harness safety: fake_tool.bats never calls the killers by pattern directly" {
   local f="$BATS_TEST_DIRNAME/fake_tool.bats"
   run bash -c "grep -v '^[[:space:]]*#' '$f' | grep -nE '(kill|grep)[[:space:]]+-f'"
@@ -59,8 +52,7 @@ load helper
 @test "harness safety: no test uses a set -e-exempt '!'-prefixed assertion" {
   local f offenders=""
   for f in "$BATS_TEST_DIRNAME"/*.bats; do
-    # A statement that STARTS with `!` (optionally indented). `while ! cond` and the
-    # like put the `!` mid-line, so anchoring at line start targets bare assertions.
+    # Anchor at line start: `while ! cond` puts the `!` mid-line, so this targets only bare assertions.
     if grep -nE '^[[:space:]]*![[:space:]]' "$f" >/dev/null 2>&1; then
       offenders="$offenders $(basename "$f")"
     fi

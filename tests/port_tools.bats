@@ -18,8 +18,7 @@ setup() {
 }
 teardown() { common_teardown; }
 
-# Fake `ss`: reports $FAKE_PORT as a LISTEN socket. Honors -p (adds a pid) and the
-# -H/no-H split ate uses; FAKE_SS_NO_H=1 makes -H fail so the fallback path runs.
+# Fake `ss`: reports $FAKE_PORT as LISTEN, honors -p, and FAKE_SS_NO_H=1 makes -H fail to force the fallback.
 make_fake_ss() {
   cat > "$BIN/ss" <<'EOF'
 #!/usr/bin/env bash

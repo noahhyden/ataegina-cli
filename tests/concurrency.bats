@@ -16,18 +16,14 @@ teardown() { common_teardown; }
   local repo wt i burst n reg total distinct
   n=12
   repo="$(make_repo "$ATE_TMP/repo")"
-  # A pool of worktrees (paths have no spaces here, so an index-addressed array is
-  # simplest and bash-3.2-safe).
+  # Index-addressed array: paths have no spaces and it is bash-3.2-safe.
   local pool=()
   for i in $(seq 1 "$n"); do
     wt="$(add_worktree "$repo" "wt$i" "br$i")"
     pool[$i]="$wt"
   done
 
-  # The race window is tiny, so a single burst catches the pre-fix bug only ~60% of
-  # the time (measured). Run SEVERAL bursts, clearing the registry before each so all
-  # N worktrees re-race from scratch; fail if ANY burst assigns a duplicate index.
-  # On fixed (locked) code every burst is deterministically collision-free.
+  # One burst catches the race only ~60% of the time, so run several, clearing the registry each time.
   for burst in 1 2 3 4 5; do
     rm -rf "$ATE_TMP/registry/repos"
     for i in $(seq 1 "$n"); do

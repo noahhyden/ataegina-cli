@@ -48,9 +48,7 @@ teardown() { common_teardown; }
   echo "$output" | grep -q "FE-only"
 }
 
-# The refuted tokens must not appear anywhere else in $output — including the
-# tailing banner, which echoes the log's full path under a mktemp dir whose random
-# suffix could contain a short token like "l1"/"a1". Use distinctive markers.
+# Use distinctive markers: the tailing banner echoes a mktemp path whose random suffix could contain a short token like "l1".
 @test "logs -n N limits the tail length" {
   printf 'LOGTOK1\nLOGTOK2\nLOGTOK3\nLOGTOK4\n' > "$LD/backend.log"
   cd "$REPO"

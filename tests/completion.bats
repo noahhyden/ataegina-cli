@@ -14,8 +14,7 @@ load helper
 setup()    { common_setup; }
 teardown() { common_teardown; }
 
-# Every top-level subcommand should be offered by completion. Kept in sync with
-# the dispatch; a missing one is a real gap this asserts against.
+# Every top-level subcommand must be offered by completion.
 ALL_CMDS="init up down restart logs db ports env exec list move prune doctor config update completion"
 
 @test "completion bash prints a sourceable bash script" {
@@ -27,9 +26,7 @@ ALL_CMDS="init up down restart logs db ports env exec list move prune doctor con
   bash -n "$ATE_TMP/comp.bash"
 }
 
-# Functional: source the emitted script and drive the completion function, so we
-# assert on what it ACTUALLY completes — not just substrings that could appear
-# elsewhere in the script (e.g. a subcommand named in an argument `case` arm).
+# Source the emitted script and drive the completion function, so we assert what it ACTUALLY completes.
 @test "completion bash actually completes every subcommand at the top level" {
   run ate completion bash
   [ "$status" -eq 0 ]

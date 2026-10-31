@@ -35,8 +35,7 @@ wait_free()      { local p="$1" i=0; while [ "$i" -lt 40 ]; do listening "$p" ||
   repo="$(make_repo "$ATE_TMP/repo")"
   mkdir -p "$ATE_TMP/data"
 
-  # Backend: connect to its injected DATABASE_URL (sqlite), record its index+port,
-  # then hold the port. Proves both the DB wiring and the process/port lifecycle.
+  # Backend connects to its injected DATABASE_URL (sqlite), records index+port, then holds the port.
   cat > "$repo/$SRV" <<'PY'
 import os, sqlite3, socket, time
 path = os.environ.get("DATABASE_URL", "").replace("sqlite:///", "")

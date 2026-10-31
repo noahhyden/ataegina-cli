@@ -1,12 +1,6 @@
 name: Release
 
-# Automates the manual steps in RELEASE.md. Fires when a vX.Y.Z tag is pushed:
-# it re-verifies the release invariants (VERSION == tag, committed checksum
-# matches the script), publishes a GitHub Release with the script + checksum +
-# man page attached, and — if a cross-repo tap token is configured — bumps the
-# Homebrew formula. The checksum/version regeneration itself stays a maintainer
-# step (see RELEASE.md); this workflow only PUBLISHES what was committed and tags
-# a mismatch as a hard failure so a bad release can never ship.
+# On a vX.Y.Z tag: re-verify VERSION/checksum, publish the Release, bump the Homebrew tap; regeneration stays manual (RELEASE.md).
 
 on:
   push:
@@ -84,9 +78,7 @@ jobs:
               --title "$TAG" --generate-notes
           fi
 
-  # Bump the Homebrew tap formula. Runs only when a HOMEBREW_TAP_TOKEN secret (a
-  # PAT with `contents:write` on noahhyden/homebrew-tap) is configured; without
-  # it the job self-skips with a note, so forks and unconfigured repos are quiet.
+  # Bump the Homebrew tap formula; self-skips when HOMEBREW_TAP_TOKEN is not configured.
   homebrew:
     needs: release
     runs-on: ubuntu-latest
