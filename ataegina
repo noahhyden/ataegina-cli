@@ -122,9 +122,6 @@ env:
                        first local of main/master/develop.
   ATE_UP_WAIT=<secs>   default timeout for a bare `up --wait` (default 60); --wait=N
                        overrides it per invocation
-  ATE_UPDATE_CHECK=1   opt in to a throttled (<=1/24h) "newer version" notice at the
-                       end of `up`. Default off. A single GET to the
-                       public GitHub API; silent on any failure. No other telemetry.
   ATE_RELEASES_URL     override the releases API URL (for `update`; testing)
   ATE_RAW_BASE         override the raw-content base URL (for `update`; testing)
   GH_TOKEN             optional GitHub token, sent as a bearer to the release feed
@@ -196,21 +193,12 @@ ate_registry_file() {
 }
 
 # ---------------------------------------------------------------------------
-# Self-update + opt-in version check.
+# Self-update: `ataegina update` delegates to install.sh (which resolves the
+# latest tag, downloads, verifies SHA-256, parse-checks and installs).
 #
-# `ataegina update` self-replaces this script with the latest published release
-# from GitHub; the opt-in check (ATE_UPDATE_CHECK=1) prints a one-line "newer
-# version available" notice at the end of `up`/`status`, throttled to <=1/24h.
-#
-# Both resolve sources through two overridable bases, so the whole path can be
-# pointed at a local stub for testing:
-#   ATE_RELEASES_URL  the "latest release" JSON feed (default: GitHub API)
-#   ATE_RAW_BASE      base for raw files; the per-tag script is
-#                     <ATE_RAW_BASE>/<tag>/ataegina (default: raw.githubusercontent)
-#
-# Zero new REQUIRED deps: curl OR wget for fetching, shasum OR sha256sum for
-# verification, all auto-detected. No jq; the tiny bits of JSON we need are
-# parsed with grep/sed.
+# Overridable bases (point at a local stub for testing):
+#   ATE_RELEASES_URL  the "latest release" JSON feed (passed through to install.sh)
+#   ATE_RAW_BASE      base for raw files; install.sh is <ATE_RAW_BASE>/HEAD/install.sh
 # ---------------------------------------------------------------------------
 
 ATE_REPO_SLUG="noahhyden/ataegina-cli"
@@ -241,57 +229,6 @@ ate_fetch() {
   fi
 }
 
-# Compute the SHA-256 of a file, printing just the lowercase hex digest. Detects
-# shasum (-a 256) then sha256sum. Empty output if neither is available.
-ate_sha256() {
-  local f="$1"
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$f" 2>/dev/null | awk '{print $1}'
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$f" 2>/dev/null | awk '{print $1}'
-  else
-    return 1
-  fi
-}
-
-# Resolve the latest published release tag (e.g. v0.2.0) from the feed, on
-# stdout. Parses `"tag_name": "vX.Y.Z"` with grep/sed (no jq). Empty + nonzero on
-# any failure (network, private repo, parse miss).
-ate_latest_tag() {
-  local timeout="${1:-20}" body tag
-  body="$(ate_fetch "$ATE_RELEASES_URL" "$timeout")" || return 1
-  [ -n "$body" ] || return 1
-  tag="$(printf '%s\n' "$body" \
-    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
-    | head -n1 \
-    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
-  [ -n "$tag" ] || return 1
-  printf '%s\n' "$tag"
-}
-
-# Strict semver-ish "greater than": is A > B? Strips a leading v, splits on dots,
-# compares the first three numeric components left to right. Non-numeric / missing
-# components are treated as 0. Returns 0 (true) if A > B, 1 otherwise.
-ate_version_gt() {
-  local a="${1#v}" b="${2#v}" i a_i b_i
-  local oldifs="$IFS"
-  IFS='.'
-  # shellcheck disable=SC2086
-  set -- $a; local a1="${1:-0}" a2="${2:-0}" a3="${3:-0}"
-  # shellcheck disable=SC2086
-  set -- $b; local b1="${1:-0}" b2="${2:-0}" b3="${3:-0}"
-  IFS="$oldifs"
-  for i in "$a1:$b1" "$a2:$b2" "$a3:$b3"; do
-    a_i="${i%%:*}"; b_i="${i##*:}"
-    # Coerce non-numeric to 0 so a malformed component cannot wedge the compare.
-    case "$a_i" in *[!0-9]*|'') a_i=0 ;; esac
-    case "$b_i" in *[!0-9]*|'') b_i=0 ;; esac
-    if [ "$a_i" -gt "$b_i" ]; then return 0; fi
-    if [ "$a_i" -lt "$b_i" ]; then return 1; fi
-  done
-  return 1
-}
-
 # Resolve this running script's own absolute path, following symlinks portably
 # (macOS readlink has no -f, so we walk the chain ourselves). Prefers an
 # installed `ataegina` on PATH, then $0. Prints the resolved path on stdout;
@@ -319,132 +256,27 @@ ate_self_path() {
   printf '%s\n' "$src"
 }
 
-# `ataegina update`: fetch the latest release, verify it, and atomically replace
-# this script. Self-contained; logs through the caller's $UPDATE_LOG prefix.
+# `ataegina update`: fetch install.sh and run it against this script's directory.
 ate_update() {
-  local self latest tmp shafile want_sha got_sha bak
-  local say
-  say() { printf "\033[1;35m[ate]\033[0m %s\n" "$*"; }
-
+  local self tmp rc=0
   self="$(ate_self_path)" || {
-    say "update: cannot resolve this script's own path; update manually." >&2
+    printf '[ate] update: cannot resolve this script'"'"'s own path; update manually.\n' >&2
     return 1
   }
   if [ ! -w "$self" ]; then
-    say "update: $self is not writable; re-run with the right permissions or update manually." >&2
+    printf '[ate] update: %s is not writable; re-run with the right permissions or update manually.\n' "$self" >&2
     return 1
   fi
-  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-    say "update: need curl or wget to fetch releases; neither found." >&2
-    return 1
-  fi
-
-  latest="$(ate_latest_tag 20)" || {
-    say "update: could not reach the release feed; the repo may be private, or set GH_TOKEN." >&2
-    return 1
-  }
-
-  if ! ate_version_gt "$latest" "$VERSION"; then
-    say "already on the latest version ($VERSION)"
-    return 0
-  fi
-
-  tmp="$(mktemp)" || { say "update: could not create a temp file." >&2; return 1; }
-  if ! ate_fetch "$ATE_RAW_BASE/$latest/ataegina" 60 > "$tmp"; then
+  tmp="$(mktemp)" || { printf '[ate] update: could not create a temp file.\n' >&2; return 1; }
+  if ! ate_fetch "$ATE_RAW_BASE/HEAD/install.sh" 60 > "$tmp" || [ ! -s "$tmp" ]; then
     rm -f "$tmp"
-    say "update: failed to download $latest; aborting (your install is untouched)." >&2
+    printf '[ate] update: could not fetch install.sh; aborting (your install is untouched).\n' >&2
     return 1
   fi
-  if [ ! -s "$tmp" ]; then
-    rm -f "$tmp"
-    say "update: downloaded an empty file; aborting." >&2
-    return 1
-  fi
-
-  # SHA-256 verification, if a checksum is published. <tag>/ataegina.sha256 is a
-  # single line "HEX  ataegina". A 404/empty means none published -> warn + skip.
-  shafile="$(mktemp)" || { rm -f "$tmp"; say "update: could not create a temp file." >&2; return 1; }
-  if ate_fetch "$ATE_RAW_BASE/$latest/ataegina.sha256" 30 > "$shafile" 2>/dev/null && [ -s "$shafile" ]; then
-    want_sha="$(awk '{print $1; exit}' "$shafile")"
-    got_sha="$(ate_sha256 "$tmp")" || got_sha=""
-    if [ -z "$got_sha" ]; then
-      rm -f "$tmp" "$shafile"
-      say "update: no shasum/sha256sum tool to verify the download; aborting." >&2
-      return 1
-    fi
-    if [ "$want_sha" != "$got_sha" ]; then
-      rm -f "$tmp" "$shafile"
-      say "update: CHECKSUM MISMATCH (expected $want_sha, got $got_sha); aborting, not installing." >&2
-      return 1
-    fi
-  else
-    say "WARN: no published checksum, skipping verification"
-  fi
-  rm -f "$shafile"
-
-  # Sanity: the download must parse as bash before we trust it.
-  if ! bash -n "$tmp" 2>/dev/null; then
-    rm -f "$tmp"
-    say "update: the downloaded script does not parse (bash -n failed); aborting." >&2
-    return 1
-  fi
-
-  # Atomic-ish replace: back up the current script, then mv the verified temp
-  # over the real path (same filesystem if mktemp's TMPDIR allows; mv falls back
-  # to copy+unlink otherwise, which is still safe given the backup).
-  bak="$self.bak"
-  if ! cp -p "$self" "$bak" 2>/dev/null; then
-    rm -f "$tmp"
-    say "update: could not back up $self to $bak; aborting." >&2
-    return 1
-  fi
-  chmod +x "$tmp" 2>/dev/null || true
-  if ! mv "$tmp" "$self" 2>/dev/null; then
-    # mv across filesystems can fail mid-flight; restore from the backup.
-    cp -p "$bak" "$self" 2>/dev/null || true
-    rm -f "$tmp"
-    say "update: failed to install the new script; restored from backup." >&2
-    return 1
-  fi
-  say "updated $VERSION -> $latest"
-  say "rollback if needed:  mv $bak $self"
-  return 0
-}
-
-# Opt-in throttled version check. Runs at the END of `up` and `status` ONLY when
-# ATE_UPDATE_CHECK is truthy. At most once per 24h (tracked by a timestamp file).
-# Offline-safe and SILENT on any failure: a short fetch timeout, and any error
-# (no network, private repo, parse fail) produces no output and never changes the
-# caller's exit status. A single GET to the public GitHub API; no other telemetry.
-ate_version_check_notice() {
-  case "${ATE_UPDATE_CHECK:-0}" in
-    1|true|yes|on) : ;;
-    *) return 0 ;;
-  esac
-  local stamp now last tag
-  stamp="$REGISTRY_DIR/.update-check"
-  now="$(date +%s 2>/dev/null)" || return 0
-  if [ -f "$stamp" ]; then
-    last="$(cat "$stamp" 2>/dev/null)" || last=""
-    case "$last" in
-      ''|*[!0-9]*) last=0 ;;
-    esac
-    # 24h = 86400s. Throttle: skip if the last check was within the window.
-    if [ "$last" -gt 0 ] && [ "$((now - last))" -lt 86400 ]; then
-      return 0
-    fi
-  fi
-  # Record the attempt up front so a hanging/erroring check still respects the
-  # throttle (we do not want to retry the network on every command).
-  mkdir -p "$REGISTRY_DIR" 2>/dev/null || true
-  printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
-  # Short timeout; swallow every error.
-  tag="$(ate_latest_tag 3 2>/dev/null)" || return 0
-  [ -n "$tag" ] || return 0
-  if ate_version_gt "$tag" "$VERSION"; then
-    printf '[ate] a newer version is available (%s); run: ataegina update\n' "$tag"
-  fi
-  return 0
+  ATE_BIN="$(dirname "$self")" ATE_RELEASES_URL="$ATE_RELEASES_URL" ATE_RAW_BASE="$ATE_RAW_BASE" \
+    sh "$tmp" || rc=$?
+  rm -f "$tmp"
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -1527,7 +1359,7 @@ cmd_init() {
 # ---------------------------------------------------------------------------
 
 # The settable keys, space-separated. Keep in sync with usage() and the example.
-ATE_CONFIG_KEYS="FRONT_PORT_BASE BACK_PORT_BASE LOG_DIR_BASE REGISTRY_DIR FRONTEND_DIR FRONTEND_CMD FRONTEND_ENV BACKEND_DIR BACKEND_CMD BACKEND_ENV DB_NAME DB_KIND DB_SUFFIX DB_URL_VAR DB_URL_TEMPLATE DB_AUTO_CREATE DB_CREATE_CMD DB_DROP_CMD ATE_BASE_BRANCH ATE_SCOPE_AUTO ATE_PORT_TOOL ATE_UPDATE_CHECK"
+ATE_CONFIG_KEYS="FRONT_PORT_BASE BACK_PORT_BASE LOG_DIR_BASE REGISTRY_DIR FRONTEND_DIR FRONTEND_CMD FRONTEND_ENV BACKEND_DIR BACKEND_CMD BACKEND_ENV DB_NAME DB_KIND DB_SUFFIX DB_URL_VAR DB_URL_TEMPLATE DB_AUTO_CREATE DB_CREATE_CMD DB_DROP_CMD ATE_BASE_BRANCH ATE_SCOPE_AUTO ATE_PORT_TOOL"
 
 # True if KEY is in the whitelist.
 config_key_known() {
@@ -2676,18 +2508,10 @@ case "$CMD" in
     # Hand the rest of the args (everything after `up`) to cmd_up, which parses a
     # MODE word and/or --scope and resolves the effective scope itself. Capture its
     # exit code (0, or 75 under --wait when a server never became ready) so we exit
-    # with it explicitly rather than leaning on set -e — and still run the throttled
-    # version check either way.
+    # with it explicitly rather than leaning on set -e.
     shift
     up_rc=0
     cmd_up "$@" || up_rc=$?
-    # Opt-in, throttled, never blocks or affects the exit status of the work above.
-    # Under --json it must not touch stdout (which is pure JSON), so route it to
-    # stderr in that case.
-    case " $* " in
-      *" --json "*) ate_version_check_notice >&2 || true ;;
-      *)            ate_version_check_notice     || true ;;
-    esac
     exit "$up_rc"
     ;;
   down)
@@ -2732,10 +2556,6 @@ case "$CMD" in
     [ "$restart_json" = 1 ] && exec 1>&4 4>&-
     restart_rc=0
     cmd_up "$@" || restart_rc=$?
-    case " $* " in
-      *" --json "*) ate_version_check_notice >&2 || true ;;
-      *)            ate_version_check_notice     || true ;;
-    esac
     exit "$restart_rc"
     ;;
   logs)

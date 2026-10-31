@@ -74,22 +74,6 @@ LOG_DIR_BASE=/tmp/ate-wt
 # backend is active. With `none`, port checks are degraded (up still starts).
 # ATE_PORT_TOOL=lsof
 
-# Opt-in update check (default OFF). When set to 1, ataegina prints a single
-# one-line notice at the END of `up` if a newer release is
-# published, e.g.:
-#   [ate] a newer version is available (v0.2.0); run: ataegina update
-# It never runs on other commands and never blocks or delays the actual work.
-# Throttled to at most once per 24h (a timestamp is kept in REGISTRY_DIR), and
-# it is fully offline-safe: a short network timeout, and ANY failure (no
-# network, the repo is private, a parse error) produces no output and does not
-# change the command's exit status. Run `ataegina update` to self-update.
-#
-# Privacy: when enabled, this makes a SINGLE GET to GitHub's public releases API
-# (api.github.com) to read the latest release tag. There is no other telemetry,
-# no identifiers are sent, and nothing is transmitted when it is off (the
-# default). The endpoint is overridable via ATE_RELEASES_URL.
-# ATE_UPDATE_CHECK=0
-
 # ---------------------------------------------------------------------------
 # Declarative config (recommended). Set these and you never write any bash:
 # ataegina's built-in default hooks read them, start each server in the right

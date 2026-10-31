@@ -236,7 +236,7 @@ always).
 | `ataegina prune` | Drop registry entries whose worktree directory is gone |
 | `ataegina doctor [--json]` | Run read-only diagnostics for this tree (never mutates; nonzero exit on a hard failure, so it works as a CI gate). `--json` emits `{status, summary:{ok,warn,fail}, checks:[{level,message}]}` on stdout (human lines to stderr) so an agent can see *which* check failed, not just the exit code |
 | `ataegina config <get\|set\|list\|unset\|path> [...]` | Read or change config values without opening the file (see "Configuration") |
-| `ataegina update` | Self-replace with the latest published release, checksum-verified, with a `.bak` rollback (see "Updating") |
+| `ataegina update` | Self-replace with the latest published release, by running `install.sh` (see "Updating") |
 | `ataegina completion <bash\|zsh>` | Print a shell completion script (subcommands + common args) to stdout. Load it with `source <(ataegina completion bash)` (or `zsh`); needs no worktree |
 
 Flag / env:
@@ -537,27 +537,15 @@ Set these in `ataegina.config.sh`:
 ## Updating
 
 ```bash
-ataegina update          # fetch the latest release, verify it, self-replace
+ataegina update          # re-run install.sh against this install
 ```
 
-`ataegina update` resolves the latest published release tag, downloads that
-tag's `ataegina`, verifies its SHA-256 against the release's published checksum
-(if none is published it prints a WARN and proceeds), `bash -n` parse-checks the
-download, then atomically replaces the on-disk script. The previous version is
-kept as `ataegina.bak`, so rollback is a single `mv ataegina.bak ataegina`
-(the command prints the exact line). If you are already on the latest version it
-says so and changes nothing. If the release feed is unreachable (for example the
-repo is still private) it aborts cleanly and leaves your install untouched; set
-`GH_TOKEN` to reach a private feed.
-
-There is also an **opt-in update check** that prints a one-line "a newer version
-is available" notice at the end of `ataegina up`. It is
-**off by default**; enable it with `ATE_UPDATE_CHECK=1` (or
-`ataegina config set ATE_UPDATE_CHECK 1`). When on it is throttled to at most
-once per 24 hours, offline-safe (any network error is swallowed silently and
-never changes a command's exit status), and does a single GET to the public
-GitHub releases API with no other telemetry. ataegina never auto-updates itself;
-updating is always an explicit `ataegina update`.
+`ataegina update` fetches `install.sh` and runs it against the directory the
+running script lives in; `install.sh` resolves the latest release tag, verifies
+its SHA-256 (if a checksum is published), `bash -n` parse-checks the download and
+installs it. It always reinstalls (it is idempotent) and keeps no backup. If the
+feed is unreachable it aborts and leaves your install untouched; set `GH_TOKEN`
+to reach a private feed. ataegina never auto-updates itself.
 
 ## Shell completion
 
@@ -583,8 +571,7 @@ Both `ataegina` and the `ate` alias are completed.
   lacks it, ataegina falls back to `ss` (iproute2, near-universal), then
   `fuser`, then a `/proc/net/tcp` parse, auto-detected. Force one with
   `ATE_PORT_TOOL=lsof|ss|fuser|proc|none`.
-- `curl` or `wget` (either one) for `ataegina update`, the opt-in update check,
-  and `install.sh`. `shasum` or `sha256sum` (either one) to verify checksums.
+- `curl` or `wget` (either one) for `ataegina update` and `install.sh`. `shasum` or `sha256sum` (either one) to verify checksums.
 - **Windows:** use WSL2 (full support). Git Bash / MSYS2 runs the launcher and
   `init`, but detached process tracking is unreliable under MSYS; native
   PowerShell / cmd is not supported. See "Platforms".
