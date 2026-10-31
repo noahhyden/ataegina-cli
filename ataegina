@@ -700,59 +700,39 @@ _ate_port_ownership() {
   echo foreign
 }
 
-ate_start_backend() {
-  [ -n "${BACKEND_CMD:-}" ] || { echo "ataegina: no backend configured (run: ataegina init)" >&2; return 1; }
-  cd "$REPO_ROOT/${BACKEND_DIR:-.}" || return 1
-  if ate_port_listening "$BACKEND_PORT"; then
-    if [ "$(_ate_port_ownership backend "$BACKEND_PORT")" = foreign ]; then
-      echo "backend  :$BACKEND_PORT is held by a process ataegina did not start ($(ate_port_proc_desc "$BACKEND_PORT")) — not launching (free it, or 'ataegina move N' to a clear slot)" >&2
+# Shared body for the two start hooks. The public ate_start_backend /
+# ate_start_frontend wrappers below stay separate overridable functions (config may
+# redefine them; doctor diffs their source against the ATE_DEFAULT_START_* snapshot).
+_ate_start_surface() {  # label port cmd dir env url
+  local label="$1" port="$2" cmd="$3" dir="$4" env="$5" url="$6" pad
+  pad="$(printf '%-8s' "$label")"
+  [ -n "$cmd" ] || { echo "ataegina: no $label configured (run: ataegina init)" >&2; return 1; }
+  cd "$REPO_ROOT/$dir" || return 1
+  if ate_port_listening "$port"; then
+    if [ "$(_ate_port_ownership "$label" "$port")" = foreign ]; then
+      echo "$pad :$port is held by a process ataegina did not start ($(ate_port_proc_desc "$port")) — not launching (free it, or 'ataegina move N' to a clear slot)" >&2
     else
-      echo "backend  already up on :$BACKEND_PORT"
+      echo "$pad already up on :$port"
     fi
     return 0
   fi
-  if _ate_launch_in_progress backend; then echo "backend  already starting on :$BACKEND_PORT (pid $(cat "$DEV_LOG_DIR/backend.pid" 2>/dev/null))"; return 0; fi
-  ( export PORT="$BACKEND_PORT" BACKEND_PORT FRONTEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
+  if _ate_launch_in_progress "$label"; then echo "$pad already starting on :$port (pid $(cat "$DEV_LOG_DIR/$label.pid" 2>/dev/null))"; return 0; fi
+  ( export PORT="$port" BACKEND_PORT FRONTEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
     # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
     # single export covers every assignment (and each value gets exported into
     # the child sh -c, not just set in this subshell).
-    [ -n "${BACKEND_ENV:-}" ] && eval "export $(printf '%s' "$BACKEND_ENV" | tr '\n;' '  ')"
-    nohup sh -c "$BACKEND_CMD" > "$DEV_LOG_DIR/backend.log" 2>&1 &
+    [ -n "$env" ] && eval "export $(printf '%s' "$env" | tr '\n;' '  ')"
+    nohup sh -c "$cmd" > "$DEV_LOG_DIR/$label.log" 2>&1 &
     # Record the launched pid so `down` can stop it even before it binds the port
     # (dependency sync / first compile) — port-only teardown misses that window.
-    echo $! > "$DEV_LOG_DIR/backend.pid"
+    echo $! > "$DEV_LOG_DIR/$label.pid"
     # Record its start-time too, so `down` can tell OUR pid from a recycled one.
-    ate_pid_starttime "$!" > "$DEV_LOG_DIR/backend.pidstart" 2>/dev/null || true
+    ate_pid_starttime "$!" > "$DEV_LOG_DIR/$label.pidstart" 2>/dev/null || true
     disown )
-  echo "backend  -> $BACKEND_URL  (log: $DEV_LOG_DIR/backend.log)"
+  echo "$pad -> $url  (log: $DEV_LOG_DIR/$label.log)"
 }
-
-ate_start_frontend() {
-  [ -n "${FRONTEND_CMD:-}" ] || { echo "ataegina: no frontend configured (run: ataegina init)" >&2; return 1; }
-  cd "$REPO_ROOT/${FRONTEND_DIR:-.}" || return 1
-  if ate_port_listening "$FRONTEND_PORT"; then
-    if [ "$(_ate_port_ownership frontend "$FRONTEND_PORT")" = foreign ]; then
-      echo "frontend :$FRONTEND_PORT is held by a process ataegina did not start ($(ate_port_proc_desc "$FRONTEND_PORT")) — not launching (free it, or 'ataegina move N' to a clear slot)" >&2
-    else
-      echo "frontend already up on :$FRONTEND_PORT"
-    fi
-    return 0
-  fi
-  if _ate_launch_in_progress frontend; then echo "frontend already starting on :$FRONTEND_PORT (pid $(cat "$DEV_LOG_DIR/frontend.pid" 2>/dev/null))"; return 0; fi
-  ( export PORT="$FRONTEND_PORT" FRONTEND_PORT BACKEND_PORT BACKEND_URL FRONTEND_URL FRONTEND_API_BASE_URL REPO_ROOT
-    # *_ENV may be one-per-line or semicolon-separated; normalize to spaces so a
-    # single export covers every assignment (and each value gets exported into
-    # the child sh -c, not just set in this subshell).
-    [ -n "${FRONTEND_ENV:-}" ] && eval "export $(printf '%s' "$FRONTEND_ENV" | tr '\n;' '  ')"
-    nohup sh -c "$FRONTEND_CMD" > "$DEV_LOG_DIR/frontend.log" 2>&1 &
-    # Record the launched pid so `down` can stop it even before it binds the port
-    # (dependency install / first compile) — port-only teardown misses that window.
-    echo $! > "$DEV_LOG_DIR/frontend.pid"
-    # Record its start-time too, so `down` can tell OUR pid from a recycled one.
-    ate_pid_starttime "$!" > "$DEV_LOG_DIR/frontend.pidstart" 2>/dev/null || true
-    disown )
-  echo "frontend -> http://localhost:$FRONTEND_PORT  (log: $DEV_LOG_DIR/frontend.log)"
-}
+ate_start_backend()  { _ate_start_surface backend  "${BACKEND_PORT:-}"  "${BACKEND_CMD:-}"  "${BACKEND_DIR:-.}"  "${BACKEND_ENV:-}"  "${BACKEND_URL:-}"; }
+ate_start_frontend() { _ate_start_surface frontend "${FRONTEND_PORT:-}" "${FRONTEND_CMD:-}" "${FRONTEND_DIR:-.}" "${FRONTEND_ENV:-}" "http://localhost:${FRONTEND_PORT:-}"; }
 
 # Print PID plus every descendant of it, one per line, from a SINGLE ps snapshot
 # (consistent tree; no per-node re-shelling). Iterative BFS so it is bash-3.2-safe
@@ -871,34 +851,42 @@ ate_stop_frontend() { _ate_stop_port "frontend" "$FRONTEND_PORT"; }
 # whether it actually came up — instead of fire-and-forget that prints a URL for
 # a server that is still starting (or already dead). We do NOT block on slow
 # first runs (dependency sync, initial compile); we point at the log instead.
-ate_report_ready() {
-  local label="$1" port="$2" url="$3" i=0
-  # If the slot is already held by a process we can positively identify as foreign,
-  # the start hook has already reported "not launching" — do NOT then poll that
-  # foreign server and cheerfully declare it "ready" (which implied ataegina had
-  # brought it up). Say nothing further here.
-  if ate_port_listening "$port" && [ "$(_ate_port_ownership "$label" "$port")" = foreign ]; then
-    return 0
+ate_report_ready() { _ate_poll_ready "$1" "$2" "$3" 8 0; }
+
+# The contract behind `up --wait`. Block until $label's $port is accepting TCP
+# connections, up to $timeout seconds, then RETURN a status the caller turns into
+# up's exit code: 0 the moment it binds, 1 if the deadline passes without it. This
+# is what lets an agent write `ataegina up --wait && curl "$BACKEND_URL/health"`
+# with no hand-rolled poll loop and no race against a not-yet-bound port. Unlike
+# ate_report_ready (best-effort human messaging, always 0), this is strict and
+# terse. $timeout may be 0 (require ready right now). No crash-vs-slow diagnostic;
+# on failure we point at the log, which is where the reason lives.
+ate_wait_ready() { _ate_poll_ready "$1" "$2" "$3" "$4" 1; }
+
+# One poll loop for both. strict=0: human messaging (skip foreign holder, tell a
+# DEAD launch from a slow one), always 0. strict=1: silent on crash, 1 on timeout.
+_ate_poll_ready() {  # label port url timeout strict
+  local label="$1" port="$2" url="$3" timeout="$4" strict="$5" i=0 lpid="" g
+  if [ "$strict" = 0 ]; then
+    # A slot held by a positively-foreign process was already reported by the start
+    # hook ("not launching"); don't poll it and declare it "ready".
+    if ate_port_listening "$port" && [ "$(_ate_port_ownership "$label" "$port")" = foreign ]; then
+      return 0
+    fi
+    # The pid we recorded at launch, so we can tell a SLOW start from a DEAD one.
+    [ -f "${DEV_LOG_DIR:-}/$label.pid" ] && lpid="$(cat "${DEV_LOG_DIR:-}/$label.pid" 2>/dev/null || true)"
   fi
-  # The pid we recorded at launch, so we can tell a SLOW start from a DEAD one.
-  local pidfile="${DEV_LOG_DIR:-}/$label.pid" lpid=""
-  [ -f "$pidfile" ] && lpid="$(cat "$pidfile" 2>/dev/null || true)"
-  while [ "$i" -lt 8 ]; do
+  while :; do
     if ate_port_listening "$port"; then
       log "  $label ready -> $url"
       return 0
     fi
-    # If what we launched has already exited without binding, it FAILED to start
-    # (bad command, missing dep, crash, invalid port). Say so — and point at the
-    # log — instead of the misleading "still starting", which left users staring at
-    # a server that was never coming up.
-    #
-    # BUT a dead launch pid is not always failure: a launcher that FORKS the real
-    # server and exits (a daemonize-style start) leaves the recorded pid dead while
-    # the child is still binding. So don't declare failure the instant the pid is
-    # gone — give the port a brief grace to appear; only then is it truly dead.
+    [ "$i" -ge "$timeout" ] && break
+    # A launch pid that already exited without binding FAILED to start — but a
+    # launcher that FORKS the real server and exits leaves a dead pid while the
+    # child is still binding, so give the port a brief grace before declaring it.
     if [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then
-      local g=0
+      g=0
       while [ "$g" -lt 15 ]; do
         if ate_port_listening "$port"; then
           log "  $label ready -> $url"
@@ -912,31 +900,12 @@ ate_report_ready() {
     fi
     sleep 1; i=$((i + 1))
   done
+  if [ "$strict" = 1 ]; then
+    log "  $label NOT ready after ${timeout}s on :$port — see ${DEV_LOG_DIR:-?}/$label.log" >&2
+    return 1
+  fi
   log "  $label still starting on :$port (first run can be slow) — tail: ${DEV_LOG_DIR:-?}/$label.log"
   return 0
-}
-
-# The contract behind `up --wait`. Block until $label's $port is accepting TCP
-# connections, up to $timeout seconds, then RETURN a status the caller turns into
-# up's exit code: 0 the moment it binds, 1 if the deadline passes without it. This
-# is what lets an agent write `ataegina up --wait && curl "$BACKEND_URL/health"`
-# with no hand-rolled poll loop and no race against a not-yet-bound port. Unlike
-# ate_report_ready (fire-and-forget, best-effort human messaging, always 0), this
-# is strict and terse. $timeout may be 0 (require ready right now). A crash-vs-slow
-# diagnostic is intentionally left to the non-wait path; on failure we point at the
-# log, which is where the reason lives.
-ate_wait_ready() {
-  local label="$1" port="$2" url="$3" timeout="$4" i=0
-  while :; do
-    if ate_port_listening "$port"; then
-      log "  $label ready -> $url"
-      return 0
-    fi
-    [ "$i" -ge "$timeout" ] && break
-    sleep 1; i=$((i + 1))
-  done
-  log "  $label NOT ready after ${timeout}s on :$port — see ${DEV_LOG_DIR:-?}/$label.log" >&2
-  return 1
 }
 
 # Database hooks. Like the start hooks, these DEFAULT implementations are defined
@@ -964,16 +933,15 @@ ate_db_default_cmd() {  # $1 = create|drop
   esac
 }
 
-ate_db_create() {
-  local cmd="${DB_CREATE_CMD:-$(ate_db_default_cmd create)}"
-  [ -n "$cmd" ] || { echo "ataegina: no DB create command for DB_KIND='$DB_KIND' (set DB_CREATE_CMD or define ate_db_create)" >&2; return 1; }
+_ate_db_run() {  # create|drop
+  local v="DB_${1}_CMD" cmd
+  v="$(printf '%s' "$v" | tr a-z A-Z)"
+  cmd="${!v-}"; cmd="${cmd:-$(ate_db_default_cmd "$1")}"
+  [ -n "$cmd" ] || { echo "ataegina: no DB $1 command for DB_KIND='$DB_KIND' (set $v or define ate_db_$1)" >&2; return 1; }
   ( export ATE_DB_NAME ATE_INDEX REPO_ROOT; sh -c "$cmd" )
 }
-ate_db_drop() {
-  local cmd="${DB_DROP_CMD:-$(ate_db_default_cmd drop)}"
-  [ -n "$cmd" ] || { echo "ataegina: no DB drop command for DB_KIND='$DB_KIND' (set DB_DROP_CMD or define ate_db_drop)" >&2; return 1; }
-  ( export ATE_DB_NAME ATE_INDEX REPO_ROOT; sh -c "$cmd" )
-}
+ate_db_create() { _ate_db_run create; }
+ate_db_drop()   { _ate_db_run drop; }
 
 # Best-effort idempotent create, called by `up` before the backend starts. Skips
 # the primary (index 0 uses the shared base DB) and is NON-FATAL: if the DB
