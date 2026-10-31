@@ -1332,8 +1332,7 @@ config_key_known() {
   return 1
 }
 
-# Reject obviously-bogus keys early with a shared message. A hook-function name
-# gets a targeted hint (edit the file directly); anything else gets the list.
+# Bogus keys fail early; a hook-function name gets a hint to edit the file directly.
 config_reject_key() {
   local k="$1"
   case "$k" in
@@ -1349,12 +1348,7 @@ config_reject_key() {
   return 2
 }
 
-# Resolve the config file path that get/set/list/path operate on (the WRITE
-# target). Precedence mirrors load_config's read order so set/get stay coherent:
-#   1. $ATE_CONFIG (explicit path) wins
-#   2. --global    -> $XDG_CONFIG_HOME/ataegina/ataegina.config.sh
-#   3. default     -> repo-root ataegina.config.sh
-# CONFIG_GLOBAL is set by cmd_config when --global was passed.
+# Config write target: $ATE_CONFIG, else --global (XDG), else repo-root ataegina.config.sh; mirrors load_config's read order.
 config_target_path() {
   if [ -n "${ATE_CONFIG:-}" ]; then
     printf '%s\n' "$ATE_CONFIG"
@@ -1365,16 +1359,7 @@ config_target_path() {
   fi
 }
 
-# Single-quote VALUE for writing into the config, keeping it literal so a
-# deferred-expansion value like `npx next dev -p $FRONTEND_PORT` round-trips
-# unchanged. Embedded single quotes are escaped the standard shell way: '\''.
-# JSON-escape a string and wrap it in double quotes, so the result is a complete
-# JSON string literal. Escapes backslash first (so we don't double-escape the ones
-# we add next), then the double quote, then the control chars JSON forbids bare
-# (tab/newline/CR — the ones that actually turn up in log paths and DB URLs).
-# bash-3.2-safe global substitution (same ${v//pat/repl} form as config_quote), no
-# external JSON tool — consistent with the rest of the script (see docs/design/
-# agent-native.md for the shared shape these emitters build).
+# JSON-escape and quote a string (backslash first, then quote and tab/newline/CR), pure bash 3.2 with no JSON tool.
 json_str() {
   local s="$1"
   s="${s//\\/\\\\}"
@@ -1387,17 +1372,13 @@ json_str() {
 
 config_quote() {
   local v="$1" out esc
-  # Replace every ' with the standard '\'' sequence (close-quote, escaped quote,
-  # reopen-quote). Build the replacement in a var: in ${v//pat/repl} the repl is
-  # taken literally (backslashes are NOT unescaped), so an inline \'\\\'\' would
-  # be stored verbatim. bash 3.2-safe global substitution; not a GNU-ism.
+  # Build the replacement in a var: ${v//pat/repl} takes repl literally, so an inline \'\\\'\' would be stored verbatim.
   esc="'\\''"
   out="${v//\'/$esc}"
   printf "'%s'" "$out"
 }
 
-# Header written when we have to create the target file from scratch. Minimal but
-# valid sourceable bash, and it points back at the example for the full menu.
+# Header for a config file created from scratch; points back at the example.
 config_header() {
   cat <<'EOF'
 # ataegina.config.sh
@@ -1407,9 +1388,7 @@ config_header() {
 EOF
 }
 
-# config set KEY VALUE: replace a top-level `KEY=...` assignment in place, or
-# append it if absent. Everything else (comments, blank lines, hook functions) is
-# preserved. Rewrites via awk to a temp file then mv (portable; no sed -i).
+# config set: replace a top-level KEY= in place or append it; awk to a temp file then mv (no sed -i).
 config_do_set() {
   local key="$1" value="$2" target quoted tmp
   target="$(config_target_path)"
@@ -1425,9 +1404,7 @@ config_do_set() {
   fi
 
   tmp="$(mktemp)" || return 1
-  # One awk pass; the value comes via ENVIRON (awk -v would mangle the
-  # backslashes in our '\''-escaped value). Only the FIRST top-level `KEY=` line
-  # is replaced, so `# KEY=` comments and `local KEY=` in functions are left alone.
+  # Value comes via ENVIRON (awk -v mangles backslashes); only the FIRST top-level KEY= line is replaced.
   val="$quoted" awk -v key="$key" '
     !d && $0 ~ ("^[[:space:]]*" key "=") { print key "=" ENVIRON["val"]; d=1; next }
     { print }
@@ -1437,8 +1414,7 @@ config_do_set() {
   log "config: set $key  ($target)"
 }
 
-# config unset KEY: drop the first top-level `KEY=...` assignment. Other lines
-# preserved. No-op (with a note) if the key is not assigned at top level.
+# config unset: drop the first top-level KEY= assignment; no-op with a note if absent.
 config_do_unset() {
   local key="$1" target tmp removed
   target="$(config_target_path)"
@@ -1463,8 +1439,7 @@ config_do_unset() {
   fi
 }
 
-# config get KEY: print KEY's EFFECTIVE value (after the normal config load, so
-# defaults are reflected). Empty line if unset and no default.
+# config get: the EFFECTIVE value after config load, so defaults show; empty if unset.
 config_do_get() {
   local key="$1"
   config_key_known "$key" || { config_reject_key "$key"; return 2; }
@@ -1472,9 +1447,7 @@ config_do_get() {
   printf '%s\n' "${!key-}"
 }
 
-# Where did KEY's effective value come from? "set in <file>" if the resolved
-# config file assigns it at top level; "default" if it has a value but the file
-# does not assign it; "unset" if it has no value at all.
+# Source of KEY's value: "set in <file>", "default", or "unset".
 config_source_of() {
   local key="$1" loaded val assigned
   loaded="${ATE_CONFIG_LOADED:-}"
@@ -1493,8 +1466,7 @@ config_source_of() {
   fi
 }
 
-# config list: every known key with its effective value + source, plus which
-# config file is loaded and which file set/get would write to.
+# config list: every key with effective value and source, plus the loaded and write-target files.
 config_do_list() {
   local loaded target key val src
   loaded="${ATE_CONFIG_LOADED:-}"
@@ -1516,8 +1488,7 @@ config_do_list() {
 
 cmd_config() {
   CONFIG_GLOBAL=0
-  # Pull --global out of the args first (it may appear anywhere). Collect the
-  # rest positionally into a small fixed set (sub + up to two operands).
+  # Pull --global out first (it may appear anywhere); collect the rest as sub plus up to two operands.
   local sub="" a1="" a2="" seen=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1550,8 +1521,7 @@ cmd_config() {
       ;;
     set)
       [ -n "$a1" ] || { echo "ataegina config set: missing KEY" >&2; return 2; }
-      # An explicit empty value is allowed (clearing a key by setting it to ""),
-      # but the operand must be PRESENT. seen counts sub + operands.
+      # An explicit empty value is allowed, but the operand must be PRESENT (seen counts sub + operands).
       [ "$seen" -ge 3 ] || { echo "ataegina config set: missing VALUE (use: config set KEY VALUE)" >&2; return 2; }
       config_do_set "$a1" "$a2"
       ;;
@@ -1566,18 +1536,7 @@ cmd_config() {
   esac
 }
 
-# ---------------------------------------------------------------------------
-# doctor: read-only diagnostics. Prints a status line per check using plain
-# ASCII markers ([ok]/[warn]/[fail]) and NEVER mutates anything. Dispatched from
-# the main case (after config load + index resolution) so it can see N, ports,
-# and the loaded config. Exit code is nonzero only if a hard [fail] occurred
-# (e.g. not inside a git worktree); plain [warn]s keep the exit code at 0, so
-# doctor is usable as a CI gate.
-# When DOCTOR_JSON=1 every check is also recorded as a JSON object so `doctor
-# --json` can emit a structured report. The human [ok]/[warn]/[fail] lines still
-# print (they go to stderr under --json via the fd swap in cmd_doctor), so the
-# check helpers stay simple and a config-defined ate_doctor that calls dok/dwarn/
-# dfail is captured too. _DOCTOR_CHECKS is a JSON array body built incrementally.
+# doctor is read-only, exits nonzero only on a hard [fail], and under DOCTOR_JSON=1 also records each check as JSON (_DOCTOR_CHECKS).
 DOCTOR_FAILED=0
 DOCTOR_JSON=0
 _DOCTOR_CHECKS=""
@@ -1607,17 +1566,12 @@ cmd_doctor() {
       *) echo "ataegina doctor: unknown argument '$_arg' (--json)" >&2; exit 2 ;;
     esac
   done
-  # Under --json the human [ok]/[warn]/… lines and the urls/hook chatter go to
-  # stderr (fd 3 holds the real stdout), so the JSON object emitted at the end is
-  # the only thing on stdout. The check helpers still record structured rows.
+  # Under --json human lines go to stderr (fd 3 holds real stdout) so only the JSON object hits stdout.
   [ "$DOCTOR_JSON" = 1 ] && exec 3>&1 1>&2
 
   log "ataegina doctor  (read-only)"
 
-  # 1. Launcher on PATH. Resolve under the INVOKED name (the basename of $0, e.g.
-  #    the recommended `ate` symlink), then fall back to the canonical `ataegina`.
-  #    A literal `command -v ataegina` would false-warn for anyone running via the
-  #    `ate` alias even though the launcher is perfectly on PATH.
+  # 1. Launcher on PATH, resolved under the INVOKED name ($0 basename), else `ataegina`, so the `ate` alias does not false-warn.
   local self onpath
   self="$(basename -- "$0")"
   onpath="$(command -v "$self" 2>/dev/null || true)"
@@ -1629,9 +1583,7 @@ cmd_doctor() {
     dwarn "launcher: not on PATH (running via a relative path); version $VERSION"
   fi
 
-  # 2. Git worktree + registry.
-  #    Reaching doctor at all means the toplevel resolved (a hard fail earlier
-  #    would have exited), so confirm and report the resolved index + registry.
+  # 2. Git worktree + registry: report the resolved index and registry.
   dok "worktree: index #$N  $TREE"
   if [ -f "$REGISTRY" ]; then
     dok "registry: $REGISTRY"
@@ -1666,11 +1618,7 @@ cmd_doctor() {
     dwarn "config: no config found, run: ataegina init"
   fi
 
-  # 4. Start config usable per side: a user-defined hook OR a declarative *_CMD.
-  #    NOTE: ataegina always defines DEFAULT ate_start_* functions, so we cannot
-  #    test "is the function defined". Instead we treat a side as runnable if the
-  #    declarative *_CMD is set; if not, we only count a hook as user-supplied
-  #    when the config redefined it (see config_redefines_start below).
+  # 4. Start config usable per side; default ate_start_* always exist, so a hook counts only if the config redefined it.
   local fe_ok=0 be_ok=0
   if config_redefines_start ate_start_frontend "$ATE_DEFAULT_START_FRONTEND"; then
     dok "frontend start: custom ate_start_frontend hook defined"; fe_ok=1
@@ -1701,10 +1649,7 @@ cmd_doctor() {
     fi
   fi
 
-  # 4b. Detected scope: what `ataegina up` would resolve for this tree (the same
-  #     UP_SCOPE_FLAG / scope: / auto-detect chain, minus any --scope this run).
-  #     Report the RAW detected value; when it is an auto-detected `none`, annotate
-  #     that `up` would nudge it to both (F5) without changing the raw value.
+  # 4b. Detected scope as `up` would resolve it (raw value; an auto-detected none is annotated as nudged to both).
   local _dscope
   UP_SCOPE_FLAG=""
   # Call plainly (NOT in $(...)) so the source side channel survives.
@@ -1716,9 +1661,7 @@ cmd_doctor() {
     dok "scope: $_dscope (what 'ataegina up' would start; override with --scope)"
   fi
 
-  # 5. Port availability for THIS tree's slot. "In use" is phrased neutrally: it
-  #    may just be this tree already up. First report which backend probes ports;
-  #    'none' means the checks are degraded (up still starts servers blindly).
+  # 5. Port availability for this slot; 'in use' may just be this tree already up; backend 'none' degrades these checks.
   local _ptool
   _ptool="$(ate_port_tool)"
   if [ "$_ptool" = "none" ]; then
@@ -1729,10 +1672,7 @@ cmd_doctor() {
   doctor_port_check "frontend" "$FE_PORT"
   doctor_port_check "backend"  "$BE_PORT"
 
-  # 6. Frontend port-pin heuristic (best-effort; skip quietly if undeterminable).
-  #    If FRONTEND_DIR's package.json dev script pins -p/--port AND the configured
-  #    FRONTEND_CMD still routes through `npm run dev` (so the slot port never
-  #    reaches the dev binary), warn that the slot port is ignored.
+  # 6. Warn if FRONTEND_DIR's dev script pins -p/--port and FRONTEND_CMD goes via `npm run dev`, so the slot port is ignored.
   if [ -n "${FRONTEND_CMD:-}" ]; then
     local fe_pkg fe_dev
     fe_pkg="$TREE/${FRONTEND_DIR:-.}/package.json"
@@ -1753,17 +1693,14 @@ cmd_doctor() {
   echo "  backend:  http://localhost:$BE_PORT"
   echo "  logs:     $LOG_DIR"
 
-  # 8. Extension hook: run the user's ate_doctor last, if defined, so a stack can
-  #    add its own checks (CORS, sidecars, ...). It inherits the exported env. A
-  #    hook that calls dok/dwarn/dfail is captured in the JSON report too.
+  # 8. Run the user's ate_doctor last, if defined; its dok/dwarn/dfail calls are captured in the JSON report too.
   if config_defines_hook ate_doctor; then
     log "ate_doctor (config-defined checks)"
     ate_doctor || true
   fi
 
   if [ "$DOCTOR_JSON" = 1 ]; then
-    # Restore the real stdout and emit the structured report there. `status` is the
-    # bottom line agents gate on; it mirrors the exit code (fail iff a hard [fail]).
+    # Restore real stdout and emit the report; `status` mirrors the exit code (fail iff a hard [fail]).
     exec 1>&3 3>&-
     local _st=pass; [ "$DOCTOR_FAILED" = 1 ] && _st=fail
     printf '{"status":"%s","summary":{"ok":%s,"warn":%s,"fail":%s},"checks":[%s]}\n' \
@@ -1773,24 +1710,19 @@ cmd_doctor() {
   return "$DOCTOR_FAILED"
 }
 
-# True if NAME is currently defined as a function. Used to detect a purely
-# config-defined hook (ate_doctor has no built-in default, so mere existence
-# means the config supplied it).
+# True if NAME is a defined function; ate_doctor has no default, so existence means the config supplied it.
 config_defines_hook() {
   declare -F "$1" >/dev/null 2>&1
 }
 
-# True if the config REDEFINED a start hook that ataegina also ships a default
-# for. We compare the current function source against the snapshot taken before
-# the config was sourced; differing source means the user overrode it.
+# True if the config redefined a start hook, by comparing its source to the pre-config snapshot.
 config_redefines_start() {
   local name="$1" default_src="$2" current_src
   current_src="$(declare -f "$name" 2>/dev/null || true)"
   [ -n "$current_src" ] && [ "$current_src" != "$default_src" ]
 }
 
-# Check one port: free -> [ok]; in use -> [warn] naming the holder. The holder
-# description degrades to "(pid unknown)" when the backend cannot map pids.
+# Check one port: free -> [ok]; in use -> [warn] naming the holder ("pid unknown" if the backend cannot map pids).
 doctor_port_check() {
   local label="$1" port="$2"
   if ate_port_listening "$port"; then
@@ -1800,27 +1732,7 @@ doctor_port_check() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# Scope resolution for `up`. Returns frontend|backend|both|none on stdout.
-# Precedence (first hit wins):
-#   1. --scope <X>           (UP_SCOPE_FLAG, an explicit override for one run)
-#   2. scope: front matter   (a `scope:` line in $ATE_TASK_FILE, if exported)
-#   3. auto-detect           (ate_task_scope over the worktree diff)
-#   4. fallback              (both)
-# The primary checkout (index 0) is ALWAYS both unless --scope overrides it: it
-# is the shared baseline that frontend-only / none trees borrow their backend
-# from, so it must serve every surface.
-# Auto-detect is on by default; ATE_SCOPE_AUTO=0 disables it (forces both).
-#
-# Side channels (globals) for the caller: this sets RESOLVED_SCOPE (the resolved
-# value), RESOLVED_SCOPE_SOURCE (HOW it was reached:
-# flag|primary|declared|auto-off|auto|fallback) and RESOLVED_SCOPE_BASE (the base
-# ref auto-detect diffed against). `cmd_up` uses the source to apply the F5
-# auto-detect-only `none -> both` nudge; `doctor` uses it to annotate without
-# changing the raw detected value. Callers MUST invoke this plainly (not in a
-# `$(...)` subshell, which would discard the globals) and read RESOLVED_SCOPE. It
-# also echoes the value for convenience.
-# ---------------------------------------------------------------------------
+# Scope for `up` (frontend|backend|both|none): flag, primary, declared, auto, fallback; sets RESOLVED_SCOPE* globals, so call it plainly (AGENTS.d 140-141).
 RESOLVED_SCOPE=""
 RESOLVED_SCOPE_SOURCE=""
 RESOLVED_SCOPE_BASE=""
@@ -1850,9 +1762,7 @@ resolve_scope() {
     RESOLVED_SCOPE_SOURCE="auto-off"; RESOLVED_SCOPE="both"
     echo both; return 0
   fi
-  # 3. auto-detect from the worktree diff. Base resolution (ate_scope_base):
-  #    ATE_BASE_BRANCH, else the branch upstream, else origin/HEAD, else the first
-  #    local of main/master/develop. ate_task_scope merge-bases against it.
+  # 3. Auto-detect from the worktree diff; ate_scope_base: ATE_BASE_BRANCH, upstream, origin/HEAD, then main/master/develop.
   local base
   base="$(ate_scope_base "$TREE")"
   RESOLVED_SCOPE_BASE="$base"
@@ -1867,19 +1777,13 @@ resolve_scope() {
   echo both
 }
 
-# The `up` command. Parses its own args (a MODE word and/or --scope X), resolves
-# the effective scope, intersects it with MODE, and starts only what is needed,
-# pointing any surface it does not run locally at the shared default server.
+# `up`: parse MODE and --scope, intersect with the resolved scope, start only what is needed; unrun surfaces point at the shared server.
 cmd_up() {
   local mode="both"
   UP_SCOPE_FLAG=""
-  # UP_WAIT empty = fire-and-forget (the default: report readiness, always exit 0).
-  # Set by --wait: block until every server this invocation launched is accepting
-  # connections, then exit 75 if any is not ready by the deadline.
+  # UP_WAIT empty = fire-and-forget (exit 0); --wait blocks until launched servers accept connections, exit 75 if not ready.
   local up_wait=""
-  # --json: emit one machine-readable slot object (plus what this invocation did)
-  # on stdout, sending every human log line and hook chatter to stderr so stdout
-  # stays pure JSON. An agent runs `up` and learns the slot + readiness in one shot.
+  # --json: one slot object on stdout; all human log lines and hook chatter go to stderr.
   local as_json=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1899,8 +1803,7 @@ cmd_up() {
           *) echo "ataegina up: --scope must be frontend|backend|both|none" >&2; exit 2 ;;
         esac
         ;;
-      # --wait bare uses ATE_UP_WAIT (default 60); --wait=N sets the timeout in
-      # seconds. Both block until the launched servers bind and gate up's exit code.
+      # --wait bare uses ATE_UP_WAIT (default 60); --wait=N sets seconds; both gate the exit code.
       --wait)       up_wait="${ATE_UP_WAIT:-60}" ;;
       --wait=*)     up_wait="${1#--wait=}" ;;
       *) echo "ataegina up: unknown argument '$1' (both|backend|frontend, --scope X, --wait[=SECONDS], --json)" >&2; exit 2 ;;
@@ -1908,24 +1811,19 @@ cmd_up() {
     shift
   done
 
-  # Validate the timeout up front (a non-negative integer), so a typo fails loudly
-  # here rather than being silently coerced in the readiness loop.
+  # Validate the timeout up front (non-negative integer) so a typo fails loudly, not coerced in the readiness loop.
   case "$up_wait" in
     ''|*[!0-9]*)
       [ -z "$up_wait" ] || { echo "ataegina up: --wait needs a non-negative integer of seconds (got '$up_wait')" >&2; exit 2; } ;;
   esac
 
-  # A TCP port must be <= 65535. If this tree's index puts a derived port past that
-  # (a huge ATE_INDEX override, or a very large registry index), fail with a clear
-  # message instead of letting the dev server die on an opaque out-of-range error.
+  # A derived port past 65535 (huge ATE_INDEX or registry index) fails with a clear message, not an opaque dev-server error.
   if [ "$FE_PORT" -gt 65535 ] || [ "$BE_PORT" -gt 65535 ]; then
     echo "ataegina up: index #$N derives a port past 65535 (frontend :$FE_PORT, backend :$BE_PORT); use 'ataegina move' to a smaller index" >&2
     exit 2
   fi
 
-  # Under --json, save the real stdout on fd 3 and route stdout to stderr for the
-  # whole start+readiness phase, so log lines and hook chatter never pollute the
-  # JSON. Restored to fd 3 just before we emit the object.
+  # Under --json save real stdout on fd 3 and send stdout to stderr for start+readiness; restored before emitting the object.
   [ "$as_json" = 1 ] && exec 3>&1 1>&2
 
   mkdir -p "$LOG_DIR"
@@ -1934,24 +1832,17 @@ cmd_up() {
   [ -n "${ATE_CONFIG_LOADED:-}" ] && log "  config $ATE_CONFIG_LOADED"
 
   local scope
-  # Call plainly (NOT in $(...)) so resolve_scope's globals survive; read the
-  # resolved value from RESOLVED_SCOPE.
+  # Call plainly (NOT in $(...)) so resolve_scope's globals survive.
   resolve_scope >/dev/null
   scope="$RESOLVED_SCOPE"
 
-  # F5: when scope was AUTO-DETECTED (no --scope, no `scope:` field) and came back
-  # `none` (empty diff vs the base, e.g. a freshly created worktree you are about
-  # to work in), starting nothing is surprising. In that auto-detect path ONLY,
-  # treat none as both and say so. An explicit `--scope none` (source=flag) and a
-  # `scope: none` task field (source=declared) still mean none; the primary
-  # (source=primary) is already both.
+  # F5: only an AUTO-DETECTED none (no --scope, no scope: field) becomes both; explicit --scope none and scope: none still mean none.
   if [ "$scope" = "none" ] && [ "${RESOLVED_SCOPE_SOURCE:-}" = "auto" ]; then
     log "no changes detected vs ${RESOLVED_SCOPE_BASE:-base}; starting both (narrow with --scope)"
     scope=both
   fi
 
-  # Intersect the resolved scope with the MODE arg (a hard limiter): `up frontend`
-  # never starts a backend regardless of scope, and vice versa.
+  # Intersect scope with the MODE arg as a hard limiter: `up frontend` never starts a backend.
   case "$mode" in
     backend)  case "$scope" in both|backend) scope=backend ;; *) scope=none ;; esac ;;
     frontend) case "$scope" in both|frontend) scope=frontend ;; *) scope=none ;; esac ;;
@@ -1979,9 +1870,7 @@ cmd_up() {
       ate_start_backend; did_be=1
       ;;
     frontend)
-      # Frontend runs here; point it at the shared default backend on the base
-      # port, UNLESS nothing is listening there, in which case fall back to a
-      # local backend so we never serve a frontend against a dead API.
+      # Frontend runs here: point it at the shared backend on the base port, unless nothing listens there, then use a local backend.
       if ate_port_listening "$BACK_PORT_BASE"; then
         log "scope: frontend (backend shared from :$BACK_PORT_BASE)"
         export BACKEND_URL="$shared_be"
@@ -2000,18 +1889,10 @@ cmd_up() {
       ;;
   esac
 
-  # Readiness. With --wait this is a CONTRACT: block until every server we launched
-  # is accepting connections and exit 75 if any is not ready by the deadline, so an
-  # agent can gate on `up --wait && <hit the server>`. Without --wait it stays the
-  # fire-and-forget best-effort report ("ready" / "still starting" / "FAILED"),
-  # always exiting 0. Nothing launched (scope backend/none with a shared backend, or
-  # scope none) is trivially ready.
+  # Readiness: with --wait a CONTRACT (block, exit 75 if any launched server is not ready); without it best-effort and exit 0.
   local up_rc=0 be_ready=0 fe_ready=0
   if [ "$as_json" = 1 ] || [ -n "$up_wait" ]; then
-    # Strict readiness: block up to the effective timeout, capture a per-surface
-    # ready bool, and gate the exit code on --wait. Effective timeout is --wait's
-    # value when given, else 0 (a single immediate check — used by a plain
-    # `up --json`, which is fire-and-forget and stays exit 0 no matter the result).
+    # Strict readiness: block to the effective timeout (--wait value, else 0 = one check), record per-surface ready, gate the exit code.
     local eff_to="${up_wait:-0}"
     if [ "$did_be" = 1 ]; then
       if ate_wait_ready "backend"  "$BE_PORT" "$BACKEND_URL"             "$eff_to"; then be_ready=1; elif [ -n "$up_wait" ]; then up_rc=75; fi
@@ -2020,15 +1901,13 @@ cmd_up() {
       if ate_wait_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT" "$eff_to"; then fe_ready=1; elif [ -n "$up_wait" ]; then up_rc=75; fi
     fi
   else
-    # Fire-and-forget best-effort report (the plain `up`): "ready" / "still
-    # starting" / "FAILED", always exit 0.
+    # Best-effort report ("ready" / "still starting" / "FAILED"), always exit 0.
     [ "$did_be" = 1 ] && ate_report_ready "backend"  "$BE_PORT" "$BACKEND_URL"
     [ "$did_fe" = 1 ] && ate_report_ready "frontend" "$FE_PORT" "http://localhost:$FE_PORT"
   fi
 
   if [ "$as_json" = 1 ]; then
-    # Restore the real stdout and emit the slot object augmented with what THIS
-    # invocation did: `started` (surfaces we launched) and `ready` (their liveness).
+    # Restore real stdout and emit the slot object plus `started` and `ready` for this invocation.
     exec 1>&3 3>&-
     local started="" sep="" ready="" rsep=""
     if [ "$did_be" = 1 ]; then
@@ -2042,19 +1921,11 @@ cmd_up() {
     emit_slot_json '' '' ",\"started\":[$started],\"ready\":{$ready}"; printf '\n'
     return "$up_rc"
   fi
-  # Explicit success: without this the function returns the status of the last test
-  # above, which is FALSE whenever no frontend was started (scope backend/none) — and
-  # `set -e` at the `cmd_up` call site would then abort `up` with exit 1 despite a
-  # fully successful start. (Same set -e + falsy-last-statement trap as emit_config.)
+  # Explicit success: else the last (falsy) test aborts `up` under `set -e` when no frontend started (AGENTS.d 040).
   return "$up_rc"
 }
 
-# Print this worktree's derived environment as eval-able shell — the SAME variables
-# `up` injects into your dev servers (see the export block below), so
-# `eval "$(ataegina env)"` reproduces that environment in your own shell and
-# `ataegina env --no-export > .env` writes a sourceable file. Values are
-# single-quoted via config_quote so a path with spaces/quotes round-trips exactly.
-# Read-only: derives from the registry + config, starts nothing, touches no network.
+# Print this tree's derived env as eval-able shell (what `up` injects), values single-quoted via config_quote; read-only.
 cmd_env() {
   local prefix='export '
   while [ $# -gt 0 ]; do
@@ -2072,8 +1943,7 @@ cmd_env() {
   printf '%sBACKEND_URL=%s\n'           "$prefix" "$(config_quote "http://localhost:$BE_PORT")"
   printf '%sFRONTEND_API_BASE_URL=%s\n' "$prefix" "$(config_quote "http://localhost:$BE_PORT")"
   printf '%sDEV_LOG_DIR=%s\n'           "$prefix" "$(config_quote "$LOG_DIR")"
-  # DB name + URL only when a database is configured (mirrors the export block).
-  # $_ate_db_url is set there iff DB_NAME and DB_URL_TEMPLATE are both present.
+  # DB name + URL only when a database is configured (_ate_db_url is set iff DB_NAME and DB_URL_TEMPLATE are present).
   if [ -n "${ATE_DB_NAME:-}" ]; then
     printf '%sATE_DB_NAME=%s\n' "$prefix" "$(config_quote "$ATE_DB_NAME")"
     if [ -n "${_ate_db_url:-}" ]; then
@@ -2082,15 +1952,7 @@ cmd_env() {
   fi
 }
 
-# Emit THIS worktree's derived slot as a single-line JSON object — the shared shape
-# `ports --json`, `status --json`, `up --json`, and `list --json` all build on (see
-# docs/design/agent-native.md). Pure data: derived from the registry + config,
-# starts nothing, touches no network. `db` is null when no database is configured;
-# `db.url` is null when DB_NAME is set but DB_URL_TEMPLATE is not. Reads the same
-# globals `up` exports (N, TREE, FE_PORT, BE_PORT, LOG_DIR, ATE_DB_NAME, _ate_db_url).
-# The `db` sub-object shared by every slot-shaped JSON emitter (ports/status/list):
-# {"name":..,"url":..}, or null when no database is configured, or url:null when
-# DB_NAME is set but DB_URL_TEMPLATE is not. Non-probing (never connects).
+# Emit this tree's slot as one-line JSON, the shape ports/status/up/list --json build on; pure data, db null when unconfigured.
 emit_db_json() {
   [ -n "${ATE_DB_NAME:-}" ] || { printf 'null'; return 0; }
   local url_json='null'
@@ -2098,9 +1960,7 @@ emit_db_json() {
   printf '{"name":%s,"url":%s}' "$(json_str "$ATE_DB_NAME")" "$url_json"
 }
 
-# Core slot emitter for an arbitrary (idx, path, ports, log dir, db json). The last
-# three args are pre-formed `,"key":value` fragments spliced in before the closing
-# brace of the frontend object, backend object, and whole object (empty = none).
+# Core slot emitter for (idx, path, ports, logdir, db json); the last three args are `,"key":value` fragments spliced in.
 _ate_slot_json() {
   local idx="$1" path="$2" fe="$3" be="$4" logd="$5" db_json="$6"
   # index and ports are integers we control, so they are emitted bare (unquoted).
@@ -2111,17 +1971,12 @@ _ate_slot_json() {
     "$(json_str "$logd")" "$db_json" "${9:-}"
 }
 
-# The current tree's slot. Optional args: extra fragments for the frontend object,
-# backend object and top level (see _ate_slot_json).
+# The current tree's slot; optional args are extra fragments for the frontend, backend and top level.
 emit_slot_json() {
   _ate_slot_json "$N" "$TREE" "$FE_PORT" "$BE_PORT" "$LOG_DIR" "$(emit_db_json)" "${1:-}" "${2:-}" "${3:-}"
 }
 
-# Classify one surface's liveness for `status`, setting _ATE_ST_STATE and
-# _ATE_ST_PID (bash-3.2 has no namerefs, so we use globals). Read-only: probes the
-# port, never touches the process. running = a live server we launched holds it;
-# foreign = something we did not launch holds it; unknown = held but ownership
-# unverifiable (often our own reparented daemon); stopped = nothing on the port.
+# Classify a surface for `status` into _ATE_ST_STATE/_ATE_ST_PID (globals: no namerefs in bash 3.2); read-only, probes the port only.
 _ate_surface_state() {
   local label="$1" port="$2"
   _ATE_ST_PID=""
@@ -2137,11 +1992,7 @@ _ate_surface_state() {
   fi
 }
 
-# `ataegina status [--json]` — READ-ONLY liveness for this worktree: the
-# side-effect-free "is my stack up, and where?" query an agent runs before acting.
-# Starts/stops nothing, opens no DB connection; exit 0 regardless of state (state
-# is data, not failure). --json prints the slot shape with state+pid folded into
-# the frontend/backend sub-objects (see docs/design/agent-native.md).
+# `status [--json]`: read-only liveness; exit 0 whatever the state; --json folds state+pid into the slot shape.
 cmd_status() {
   local as_json=0 _arg
   for _arg in "$@"; do
@@ -2172,12 +2023,7 @@ cmd_status() {
   return 0
 }
 
-# Emit ONE worktree's slot object for `list --json`, given its index and path.
-# Same slot shape as emit_slot_json but computed for an ARBITRARY (idx, path) from
-# the current repo's config (port bases, DB naming) rather than the current tree,
-# plus two list-only fields: `stale` (its directory is gone) and `live` (a coarse
-# best-effort "any of its derived ports is listening" — always false when the port
-# backend is `none`). The db object is derived exactly as `up` derives it per tree.
+# One worktree's slot for `list --json`, computed for an arbitrary (idx, path), plus `stale` (dir gone) and `live` (any derived port listening).
 _ate_list_entry_json() {
   local idx="$1" path="$2"
   local fe=$((FRONT_PORT_BASE + idx)) be=$((BACK_PORT_BASE + idx))
@@ -2192,17 +2038,13 @@ _ate_list_entry_json() {
   if [ -n "${DB_NAME:-}" ]; then
     local dbname
     if [ "$idx" = 0 ]; then dbname="$DB_NAME"; else dbname="${DB_NAME}${DB_SUFFIX}${idx}"; fi
-    # Subshell so setting ATE_DB_NAME/_ate_db_url for this entry never leaks into the
-    # current tree's globals; emit_db_json reads exactly those two.
+    # Subshell so ATE_DB_NAME/_ate_db_url for this entry never leak into the current tree's globals.
     db_json="$( ATE_DB_NAME="$dbname"; _ate_db_url=""; [ -n "${DB_URL_TEMPLATE:-}" ] && eval "_ate_db_url=\"$DB_URL_TEMPLATE\""; emit_db_json )"
   fi
   _ate_slot_json "$idx" "$path" "$fe" "$be" "$logd" "$db_json" '' '' ",\"stale\":$stale,\"live\":$live"
 }
 
-# `ataegina list [--json]` — every registered worktree of this repo. Human form is
-# a tab table (primary first, stale entries flagged). --json is a JSON ARRAY of the
-# slot shape + stale/live per entry: the fleet view a supervising agent uses to see
-# all its workers at once (docs/design/agent-native.md).
+# `list [--json]`: every registered worktree; human tab table or a JSON ARRAY of slot objects plus stale/live.
 cmd_list() {
   local as_json=0 _arg
   for _arg in "$@"; do
@@ -2238,9 +2080,7 @@ cmd_list() {
   fi
 }
 
-# Print a shell completion script to stdout. Needs no worktree/config, so it runs
-# before the git-worktree requirement — you source it from an rc file anywhere.
-# The subcommand list mirrors the dispatch; keep it in sync when adding commands.
+# Print a shell completion script; needs no worktree or config, and its subcommand list must mirror the dispatch.
 cmd_completion() {
   local shell="${1:-}"
   local cmds="init up down restart logs db ports status env exec list move prune doctor config update completion"
@@ -2299,21 +2139,17 @@ EOF
   esac
 }
 
-# A bare `ataegina` (no args) prints usage and exits at the top-level case above,
-# so $1 is always a real subcommand by the time we get here.
+# A bare `ataegina` exits at the top-level case, so $1 is always a real subcommand here.
 CMD="${1:-}"
 
-# `update` self-replaces this script. It needs no git worktree, no config, and no
-# port slot, so it runs here (before the worktree requirement below), mirroring
-# how --version / --help short-circuit at the top.
+# `update` self-replaces this script and needs no worktree, config or port slot, so it runs before the worktree requirement.
 if [ "$CMD" = "update" ]; then
   rc=0
   ate_update || rc=$?
   exit "$rc"
 fi
 
-# `completion` prints a static script; it needs no worktree, config, or port slot,
-# so it short-circuits here (like update) — you source it from an rc file anywhere.
+# `completion` prints a static script and needs no worktree, config or slot, so it short-circuits like update.
 if [ "$CMD" = "completion" ]; then
   shift
   cmd_completion "$@"
@@ -2323,16 +2159,11 @@ fi
 # Anchor on the worktree the user is standing in, NOT where this script lives.
 TREE="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "ataegina: not inside a git worktree" >&2; exit 1; }
-# The first `worktree ` line of the porcelain output is the primary checkout. Take
-# everything after the "worktree " prefix rather than the 2nd whitespace field: a
-# repo path can contain SPACES (macOS "~/My Project", cloud-synced dirs), which
-# `awk '{print $2}'` would truncate at the first space — that made TREE != PRIMARY
-# even in the primary checkout, so it lost index 0 (its shared DB + base ports).
+# Primary checkout = everything after the "worktree " prefix on the first porcelain line, never awk $2 (paths can contain spaces; AGENTS.d 146).
 PRIMARY="$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -n1)"
 PRIMARY="${PRIMARY:-$TREE}"
 
-# init runs before config load (it writes the config) and before index
-# assignment (it does not need a port slot).
+# init runs before config load and index assignment (it writes the config and needs no slot).
 if [ "$CMD" = "init" ]; then
   log() { printf "\033[1;35m[ate]\033[0m %s\n" "$*"; }
   shift
@@ -2340,23 +2171,18 @@ if [ "$CMD" = "init" ]; then
   exit 0
 fi
 
-# Snapshot the DEFAULT start-hook bodies before sourcing the config, so doctor
-# can tell whether the user's config REDEFINED a start hook (vs. just inheriting
-# the built-in declarative default). declare -f prints the function source.
+# Snapshot the default start hooks before sourcing the config so doctor can tell whether the user redefined one.
 ATE_DEFAULT_START_FRONTEND="$(declare -f ate_start_frontend 2>/dev/null || true)"
 ATE_DEFAULT_START_BACKEND="$(declare -f ate_start_backend 2>/dev/null || true)"
 
 load_config "$TREE"
 
-# Re-read registry paths in case the config changed REGISTRY_DIR. The registry is
-# per-repo (keyed on the primary checkout) unless ATE_REGISTRY pins one file.
+# Re-read registry paths in case config changed REGISTRY_DIR; the registry is per-repo unless ATE_REGISTRY pins a file.
 REGISTRY="$(ate_registry_file)"
 
 log() { printf "\033[1;35m[ate]\033[0m %s\n" "$*"; }
 
-# config runs after config load (so it can report effective values + the loaded
-# file) but BEFORE index assignment: editing the config needs no port slot, and
-# it must work even when no config exists yet (set creates one).
+# config runs after config load but BEFORE index assignment: it needs no slot and must work with no config yet.
 if [ "$CMD" = "config" ]; then
   shift
   rc=0
@@ -2364,12 +2190,7 @@ if [ "$CMD" = "config" ]; then
   exit "$rc"
 fi
 
-# Resolve (or assign) this worktree's index, persisting the mapping so the same
-# tree always gets the same ports across runs.
-#
-# Index recycling: the next free index is the lowest positive integer not
-# currently claimed in the registry. `prune` frees the slots of deleted trees,
-# so a freed index is reused by the next new worktree.
+# Resolve or assign this tree's index and persist it; the next free index is the lowest unclaimed positive integer, so prune'd slots are reused.
 resolve_index() {
   if [ -n "${ATE_INDEX:-}" ]; then echo "$ATE_INDEX"; return; fi
   if [ "$TREE" = "$PRIMARY" ]; then echo 0; return; fi
@@ -2378,22 +2199,14 @@ resolve_index() {
   existing="$(awk -F'\t' -v p="$TREE" '$2==p{print $1; exit}' "$REGISTRY")"
   if [ -n "$existing" ]; then echo "$existing"; return; fi
 
-  # Claim a free index under an exclusive lock. WITHOUT this, two worktrees running
-  # their first `up` concurrently both scan the registry, both find the same lowest
-  # free N, and both take it -> two trees share an index => identical derived ports
-  # AND the same per-worktree DB name: the exact collision this tool exists to
-  # prevent, in its headline "fleet of parallel agents" use case. `mkdir` is an
-  # atomic mutex on any POSIX filesystem (portable; `flock` is Linux-only / absent on
-  # macOS). Bounded spin then proceed best-effort, so a dead lock holder can never
-  # deadlock us; the leaked lock dir self-heals once we (or anyone) rmdir it.
+  # Claim a free index under an exclusive mkdir lock (atomic, portable) or two first-`up`s share an index, ports and DB (AGENTS.d 070, 144).
   local lockdir="$REGISTRY.lock" tries=0
   while ! mkdir "$lockdir" 2>/dev/null; do
     tries=$((tries + 1))
     if [ "$tries" -ge 500 ]; then break; fi     # ~10s ceiling, then proceed anyway
     sleep 0.02 2>/dev/null || sleep 1
   done
-  # Double-checked: another process may have registered THIS tree while we waited on
-  # the lock; if so, reuse that index instead of appending a duplicate row.
+  # Double-checked: reuse the index if another process registered THIS tree while we waited on the lock.
   existing="$(awk -F'\t' -v p="$TREE" '$2==p{print $1; exit}' "$REGISTRY")"
   if [ -z "$existing" ]; then
     local n=1
@@ -2418,20 +2231,12 @@ export REPO_ROOT="$TREE"
 export FRONTEND_PORT="$FE_PORT"
 export BACKEND_PORT="$BE_PORT"
 export DEV_LOG_DIR="$LOG_DIR"
-# A frontend talking to a per-tree backend needs the backend's address; a backend
-# building CORS/OAuth-redirect/email URLs needs the frontend's. Exported under the
-# common names so most stacks pick them up without remapping (and remap the rest
-# via FRONTEND_ENV/BACKEND_ENV). cmd_up may repoint BACKEND_URL when a frontend-only
-# tree shares the base-port backend; FRONTEND_URL is always this tree's frontend.
+# Export URLs under common names (BACKEND_URL/FRONTEND_URL); cmd_up may repoint BACKEND_URL to the shared base-port backend.
 export BACKEND_URL="http://localhost:$BE_PORT"
 export FRONTEND_URL="http://localhost:$FE_PORT"
 export FRONTEND_API_BASE_URL="http://localhost:$BE_PORT"
 
-# Per-worktree database name + URL (only when DB_NAME is configured). The primary
-# (index 0) keeps the unsuffixed name so it points at your shared dev DB; each
-# worktree N>0 gets its own DB_NAME$DB_SUFFIX$N so parallel agents never collide
-# on schema or data. DB_URL_TEMPLATE (trusted config, same model as *_CMD) is
-# expanded with $ATE_DB_NAME and injected into $DB_URL_VAR (default DATABASE_URL).
+# Per-worktree DB: index 0 keeps DB_NAME, N>0 gets DB_NAME$DB_SUFFIX$N; DB_URL_TEMPLATE expands into $DB_URL_VAR.
 if [ -n "${DB_NAME:-}" ]; then
   if [ "$N" = 0 ]; then ATE_DB_NAME="$DB_NAME"; else ATE_DB_NAME="${DB_NAME}${DB_SUFFIX}${N}"; fi
   export ATE_DB_NAME
@@ -2443,19 +2248,14 @@ fi
 
 case "$CMD" in
   up)
-    # Hand the rest of the args (everything after `up`) to cmd_up, which parses a
-    # MODE word and/or --scope and resolves the effective scope itself. Capture its
-    # exit code (0, or 75 under --wait when a server never became ready) so we exit
-    # with it explicitly rather than leaning on set -e.
+    # Pass the args after `up` to cmd_up and exit with its code explicitly (0, or 75 under --wait), not via set -e.
     shift
     up_rc=0
     cmd_up "$@" || up_rc=$?
     exit "$up_rc"
     ;;
   down)
-    # Parse an optional mode word and a --force flag in any order (so both
-    # `down backend --force` and `down --force backend` work). --force lets down
-    # reap a slot held by a process ataegina did not start (see _ate_stop_port).
+    # Parse a mode word and --force in any order; --force reaps a slot held by a process ataegina did not start.
     shift
     down_mode=both
     for _arg in "$@"; do
@@ -2472,17 +2272,11 @@ case "$CMD" in
     esac
     ;;
   restart)
-    # Stop this tree's servers, then start them again: a `down` followed by `up`.
-    # The STOP phase mirrors a leading mode word (default both) so `restart backend`
-    # bounces only the backend and leaves a running frontend alone. ALL args are
-    # forwarded to cmd_up, which resolves the final scope (mode word and/or --scope)
-    # and owns the exit status.
+    # down then up; the stop phase mirrors a leading mode word, and ALL args go to cmd_up, which owns scope and exit status.
     shift
     restart_mode=both
     case "${1:-}" in both|backend|frontend) restart_mode="$1" ;; esac
-    # Under --json the stop-phase chatter must not pollute stdout either; save the
-    # real stdout on fd 4 and route this phase to stderr, then restore before cmd_up
-    # (which does its own fd-3 swap and owns the JSON emission).
+    # Under --json save real stdout on fd 4 and send the stop phase to stderr; restore before cmd_up (own fd-3 swap, emits the JSON).
     restart_json=0
     case " $* " in *" --json "*) restart_json=1 ;; esac
     [ "$restart_json" = 1 ] && exec 4>&1 1>&2
@@ -2514,8 +2308,7 @@ case "$CMD" in
       esac
     done
     if [ "$ports_json" = 1 ]; then
-      # Pure JSON on stdout (one line, greppable/pipe-friendly): the shared slot
-      # object, nothing else. An agent parses this instead of the human table.
+      # Pure JSON on stdout: the shared slot object, nothing else.
       emit_slot_json; printf '\n'
     else
       log "worktree #$N  $TREE"
@@ -2534,27 +2327,17 @@ case "$CMD" in
     ;;
   exec)
     shift
-    # Optional `--` separates ataegina's args from the command, so a command that
-    # starts with a dash (e.g. `ataegina exec -- -flagged-tool`) is not mistaken
-    # for an ataegina option.
+    # Optional `--` separates ataegina's args from the command so a dash-leading command is not taken as an option.
     [ "${1:-}" = "--" ] && shift
     if [ "$#" -eq 0 ]; then
       echo "ataegina exec: needs a command, e.g. ataegina exec -- npm test" >&2
       exit 2
     fi
-    # The per-tree environment (ATE_INDEX, the *_PORT / *_URL vars, DEV_LOG_DIR,
-    # and ATE_DB_NAME + the DB URL when configured) is already exported above, so
-    # the command inherits it. `exec` replaces this process, so the command's exit
-    # status becomes ours and it owns the terminal directly (signals, stdio). The
-    # `--` guards a command whose name starts with a dash: without it exec would
-    # parse e.g. `-mytool` as its own option and fail with "invalid option".
+    # The per-tree env is already exported; `exec` replaces this process, so the command owns the terminal and exit status; `--` guards dash-leading names.
     exec -- "$@"
     ;;
   open)
-    # Open this tree's derived URL in a browser. Default target is the frontend
-    # (the thing you look at); `backend` opens the API URL. Opener resolution:
-    # $BROWSER (scriptable; may carry its own flags, hence unquoted), else the
-    # platform default (xdg-open on Linux, open on macOS). With none, print the URL.
+    # Open this tree's URL (frontend, or `backend`): $BROWSER (unquoted, may carry flags), else xdg-open/open, else print it.
     shift
     open_target="${1:-frontend}"
     case "$open_target" in
@@ -2593,11 +2376,7 @@ case "$CMD" in
     log "pruned $removed stale entr$([ "$removed" = 1 ] && echo y || echo ies)"
     ;;
   move)
-    # Relocate THIS worktree to a different index (and therefore a different
-    # port pair). Useful when the auto-assigned slot's ports are permanently
-    # taken by something ataegina doesn't manage (another tool, a daemon), so
-    # the derived ports can never bind. Without this you'd hand-edit the
-    # registry. The primary is always index 0 and can't be moved.
+    # Relocate THIS worktree to another index (a new port pair) for when the slot's ports are taken; the primary (0) cannot move.
     shift
     target="${1:-}"
     if [ "$TREE" = "$PRIMARY" ]; then
@@ -2613,9 +2392,7 @@ case "$CMD" in
       echo "ataegina: index 0 is reserved for the primary checkout" >&2
       exit 2
     fi
-    # Derived ports are BASE+index; a TCP port must be <= 65535. Refuse a target that
-    # would push either past that, rather than assign a slot whose servers can never
-    # bind (the engine would just die with an out-of-range-port error at `up`).
+    # Derived ports are BASE+index and must be <= 65535; refuse a target that would push either past it.
     if [ "$((FRONT_PORT_BASE + target))" -gt 65535 ] || [ "$((BACK_PORT_BASE + target))" -gt 65535 ]; then
       echo "ataegina: index $target puts a port past 65535 (frontend $((FRONT_PORT_BASE + target)), backend $((BACK_PORT_BASE + target))); pick a smaller index" >&2
       exit 2
@@ -2626,16 +2403,10 @@ case "$CMD" in
       echo "          pick a free index ('ataegina list' shows what's taken), or 'ataegina prune' if it's stale" >&2
       exit 2
     fi
-    # Free the OLD slot BEFORE relocating. Any servers this tree is running were
-    # launched under its CURRENT index — old ports (FE_PORT/BE_PORT) and old log dir
-    # (DEV_LOG_DIR). Once the registry points at the new index, a later `down` would
-    # resolve the NEW slot and never reach them, orphaning them on the old ports. Stop
-    # them here while the env still refers to the old slot. Stderr (the harmless
-    # "nothing to stop" when idle) is squelched; a real "stopped on :port" still shows.
+    # Stop the OLD slot BEFORE relocating, else a later `down` resolves the new slot and orphans servers (AGENTS.d 145).
     ate_stop_frontend 2>/dev/null || true
     ate_stop_backend  2>/dev/null || true
-    # Rewrite the registry: drop any line for this tree AND any (stale) line
-    # holding the target index, then append the new mapping.
+    # Rewrite the registry: drop this tree's line and any stale line holding the target index, then append.
     mkdir -p "$(dirname "$REGISTRY")"; touch "$REGISTRY"
     tmp="$(mktemp)"
     awk -F'\t' -v p="$TREE" -v i="$target" '$2!=p && $1!=i' "$REGISTRY" > "$tmp"
@@ -2655,8 +2426,7 @@ case "$CMD" in
     log "the old slot's servers (if any) were stopped; now run 'ataegina up' on the new slot"
     ;;
   doctor)
-    # cmd_doctor may return nonzero on a hard [fail]; guard against set -e so we
-    # exit with its code rather than aborting mid-function.
+    # cmd_doctor may return nonzero on a hard [fail]; guard against set -e so we exit with its code.
     shift
     rc=0
     cmd_doctor "$@" || rc=$?
