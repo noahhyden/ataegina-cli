@@ -42,9 +42,7 @@ means the integrity guarantee only holds for releases that publish a checksum.
 Maintainers should always publish one (see `RELEASE.md`).
 
 The release feed and raw-content base are read over HTTPS from GitHub by default.
-No telemetry is sent: the opt-in update check (`ATE_UPDATE_CHECK=1`) makes at
-most one GET per 24h to the public GitHub releases API to read the latest tag,
-sends no identifiers, and transmits nothing when it is off (the default).
+No telemetry is sent: `ataegina` makes no network calls except an explicit `ataegina update`.
 
 ### The config is sourced bash: only run ataegina in repos you trust
 

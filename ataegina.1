@@ -243,8 +243,9 @@ Read or write scalar keys in
 With no subcommand, lists every known key, its effective value, and its source.
 .TP
 .B update
-Self-update the installed script to the latest published release (checksum
-verified, with a backup of the previous version).
+Self-update the installed script to the latest published release by running
+.B install.sh
+(which verifies the checksum).
 .TP
 .B completion \fR{bash|zsh}
 Print a shell completion script to stdout, completing subcommands and one level
@@ -324,12 +325,6 @@ Default timeout in seconds for a bare
 (default 60).
 .B --wait=SECONDS
 overrides it for one invocation.
-.TP
-.B ATE_UPDATE_CHECK=1
-Opt in to a throttled (at most once per 24h) "newer version" notice at the end of
-.BR up .
-Off by default. One GET to the public GitHub API; silent on failure. No other
-telemetry.
 .TP
 .B GH_TOKEN
 Optional GitHub token, sent as a bearer to the release feed.
