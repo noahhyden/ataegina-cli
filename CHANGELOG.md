@@ -13,84 +13,56 @@ line but were not separately git-tagged.
 
 ### Changed
 
-- **Relicensed from MIT to Apache License 2.0** (`LICENSE`), with a trademark
-  reservation in a new `NOTICE` file: the name *ataegina*, the repository name
-  *ataegina-cli*, the name *Noah Hyden*, and the project's logos are not
-  licensed under it. `LICENSE` is the verbatim Apache 2.0 text with only the
-  appendix copyright line filled in, so it still resolves as Apache-2.0 to SPDX
-  and GitHub. The code is as free to fork as before — a fork simply needs its
-  own name. Sole copyright holder, so no third-party consent was required, and
-  releases published before the move (up to and including v1.0.1) keep the MIT
-  terms they shipped under. `TRADEMARKS.md` spells out what is fine without
-  asking (nominative use, forking) and what needs permission (branding a
-  product, publishing a package under the name, implying endorsement).
-
-- **`ataegina update` now delegates to `install.sh` instead of reimplementing
-  it.** The launcher carried a second copy of the installer's whole flow —
-  resolve the latest tag, download, verify SHA-256, `bash -n` parse-check,
-  install — alongside `ate_sha256`, `ate_latest_tag` and `ate_version_gt`.
-  `update` now fetches `install.sh` and runs it with `ATE_BIN` pointed at the
-  directory of the script it resolved, so verification happens in exactly one
-  place. `ATE_RELEASES_URL`, `ATE_RAW_BASE` and `GH_TOKEN` still apply.
-  **Behaviour lost:** the "already on the latest version" short-circuit (update
-  now always reinstalls; `install.sh` is idempotent) and the `.bak` rollback
-  file.
-- **Removed the opt-in update-check notice.** `ATE_UPDATE_CHECK=1` and the
-  throttled "a newer version is available" line at the end of `up` are gone,
-  along with the config key. The tool now makes no network call unless you run
-  `ataegina update`.
-- **Deduplicated the hook, readiness and database layers.** The two start hooks
-  were one body with the label swapped, and `ate_report_ready` / `ate_wait_ready`
-  were two poll loops over the same probe. They now share `_ate_start_surface`
-  and `_ate_poll_ready`, and `ate_db_create` / `ate_db_drop` share `_ate_db_run`.
-  All four public hook names remain overridable from a config file, and
-  `doctor`'s detection of a user-redefined start hook is unchanged.
-- **The four slot-JSON emitters share one format.** `ports --json`,
-  `status --json`, `up --json` and `list --json` each printed their own copy of
-  the slot object; they now call one emitter. Output is unchanged.
-- **`config set` rewrites the file in one awk pass.** The two-pass sentinel dance
-  existed only because `awk -v` mangles backslashes in an already-quoted value;
-  passing the value through the environment avoids that entirely.
-- **`emit_quote` is gone in favour of `config_quote`.** It was the same function
-  without the single-quote escaping, so a generated config value containing a
-  quote now round-trips correctly.
+- **Relicensed from MIT to Apache License 2.0** (`LICENSE`), with the marks
+  reserved in `NOTICE` and `TRADEMARKS.md`: the names *ataegina*,
+  *ataegina-cli* and *Noah Hyden*, and the project's logos, are not licensed
+  with the code. Fork freely; a fork needs its own name. Releases up to and
+  including v1.0.1 keep the MIT terms they shipped under.
+- **`ataegina update` delegates to `install.sh`** instead of carrying a second
+  copy of its resolve/download/verify/install flow. Loses the "already on the
+  latest version" short-circuit and the `.bak` rollback; `install.sh` is
+  idempotent.
+- **Deduplicated the hook, readiness, database, JSON and config-writer layers.**
+  `_ate_start_surface`, `_ate_poll_ready` and `_ate_db_run` replace three
+  duplicated pairs; the four slot-JSON emitters share one format; `config set`
+  rewrites in one awk pass. All public hook names stay overridable and every
+  command's output is unchanged.
+- **`emit_quote` folded into `config_quote`**, so a generated config value
+  containing a single quote now round-trips correctly.
+- **Explanation in code is capped at one line**, with the long form in
+  `AGENTS.d/`. Enforced by `check_one_line_comments.py` against a baseline that
+  may only shrink, now at zero.
 
 ### Removed
 
-- `CODE_OF_CONDUCT.md` and `SECURITY.md`. Private vulnerability reporting is
-  unaffected — it already went through GitHub security advisories, which the
-  issue-template config still links, and the README still describes the trust
-  model (`update` verifies every download; the config file is sourced bash that
-  runs with your privileges).
-- **1381 lines of superseded documentation.** The `smart-ports`, `portability`
-  and `onboarding-redesign` design docs and the three dogfooding logs described
-  features that shipped in v0.5.0 through v1.0.0. `docs/design/agent-native.md`
-  is kept — the test suite cites it as a live spec.
-- **The coverage gate and `scripts/coverage.sh`.** Measuring line coverage
-  needed bashcov run once per bats file with the results unioned in Python,
-  because SimpleCov's single resultset races under bats. That cost ruby, the
-  bashcov gem and a CI job to re-assert what the `test`, `integration`,
-  `macos-bash32` and `windows-gitbash` jobs already cover.
+- **`ATE_UPDATE_CHECK` and the update-check notice.** The tool makes no network
+  call unless you run `ataegina update`.
+- **The man page `ataegina.1`.** It was a third hand-maintained copy of the
+  reference already in `--help` and the README, with nothing keeping the three
+  in sync. `install.sh` no longer installs it and `ATE_MAN` is gone.
+- **`sandbox/`.** Its own README pointed at `tests/` for the CI-run versions of
+  the same scenarios; use `ATE_TEST_INTEGRATION=1 bats tests/`.
+- **The coverage gate and `scripts/coverage.sh`**, which cost ruby, the bashcov
+  gem and a CI job to re-assert what `test`, `integration`, `macos-bash32` and
+  `windows-gitbash` already cover.
+- **1381 lines of superseded design docs and dogfooding logs.**
+  `docs/design/agent-native.md` is kept — the test suite cites it as a spec.
+- **`CODE_OF_CONDUCT.md` and `SECURITY.md`.** Private vulnerability reporting
+  is unaffected: it already ran through GitHub security advisories, which the
+  issue-template config still links.
 
 ### Added
 
 - **`AGENTS.d/` and two context guards.** A rule is one file of one line of at
-  most 255 characters (`check_agents_rule_length.py`), and explanation in code
-  is capped at one line, ratcheted against a baseline that may only shrink
-  (`check_one_line_comments.py`). The bash scanner tracks heredoc delimiters so
-  `#` lines inside `usage()`, the config header and the completion scripts are
-  read as output rather than prose, and claims extensionless files by shebang so
-  the launcher itself is scanned. `ataegina.config.example.sh` is exempt: its
-  comments are the reference users read, not explanation of code.
+  most 255 characters; the comment guard scans bash, yaml and python, skips
+  heredoc and block-scalar bodies, and claims extensionless files by shebang so
+  the launcher itself is covered.
 
 ### Known issues
 
 - **`resolve_index` can still hand two worktrees the same index.** The `mkdir`
-  mutex gives up after a bounded ~10s spin and proceeds anyway, so a heavily
-  loaded machine can produce the collision the tool exists to prevent.
-  `tests/concurrency.bats` fails intermittently on exactly this (observed once
-  on a CI runner as `12 rows, 11 distinct`). Pre-existing; not introduced by the
-  changes above.
+  mutex gives up after a bounded ~10s spin and proceeds anyway.
+  `tests/concurrency.bats` fails intermittently on exactly this. Pre-existing.
 
 ## [1.0.1] - 2026-07-20
 

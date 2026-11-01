@@ -11,8 +11,8 @@ verifies will abort with a checksum mismatch.
 Run from the repo root, working tree clean.
 
 1. **Bump the version.** Edit `VERSION="X.Y.Z"` near the top of `ataegina`.
-   This is the single source of truth: `--version` prints it, and the update
-   check compares the latest release tag against it.
+   This is the single source of truth: `--version` prints it, and the
+   `release-verify` CI job fails a tag build whose `VERSION` does not match.
 
 2. **Regenerate the checksum** from the exact file you are about to commit:
 
@@ -44,14 +44,14 @@ Run from the repo root, working tree clean.
 5. **The GitHub release is created automatically.** The `.github/workflows/release.yml`
    workflow fires on the `vX.Y.Z` tag: it re-verifies `VERSION == tag` and that
    the committed `ataegina.sha256` matches the script (a mismatch fails the run,
-   so a bad release never ships), then publishes the release with `ataegina`,
-   `ataegina.sha256`, and `ataegina.1` attached. Notes are taken from the matching
+   so a bad release never ships), then publishes the release with `ataegina`
+   and `ataegina.sha256` attached. Notes are taken from the matching
    `## [X.Y.Z]` section of `CHANGELOG.md` when present, else auto-generated.
 
    To publish by hand instead (e.g. the workflow is disabled):
 
    ```sh
-   gh release create vX.Y.Z ataegina ataegina.sha256 ataegina.1 --title "vX.Y.Z" --notes "..."
+   gh release create vX.Y.Z ataegina ataegina.sha256 --title "vX.Y.Z" --notes "..."
    ```
 
 6. **The Homebrew formula is bumped automatically** *when a `HOMEBREW_TAP_TOKEN`

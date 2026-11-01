@@ -23,7 +23,8 @@ or the `ss`/`fuser`/`proc` fallback). Keep it that way.
 ## Workflow
 
 1. Open an issue describing the change before large PRs.
-2. One logical change per PR. Small is good.
+2. One logical change per PR. Small is good. New behaviour comes with a bats
+   test.
 3. Update the README and `ataegina.config.example.sh` if you change the CLI,
    the config keys, or the exported hook environment.
 4. Cutting a release? Follow [`RELEASE.md`](RELEASE.md) so the published
@@ -53,8 +54,6 @@ implies pulling images (network), so it is **local-only** — CI does not run it
 keep CI network-free. Each docker test skips cleanly when docker is unavailable.
 
 To run just one tier's new file, e.g.: `ATE_TEST_INTEGRATION=1 bats tests/flagship_e2e.bats`.
-
-**Tests.** The CI `test` and `integration` jobs run the suite on Linux and macOS; new behaviour should come with a bats test.
 
 `shellcheck ataegina` should stay clean (see the exclusion list in
 `.github/workflows/ci.yml`), and any change to `ataegina` must be followed by

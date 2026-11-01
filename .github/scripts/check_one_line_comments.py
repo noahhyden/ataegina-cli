@@ -19,7 +19,6 @@ BASELINE_PATH = REPO_ROOT / ".github" / "one-line-comment-baseline.json"
 SKIP_PREFIXES: tuple[str, ...] = (
     # The example config is the reference users read and copy: its comments are the product, not explanation of code.
     "ataegina.config.example.sh",
-    "sandbox/.work/",
     "coverage/",
     "node_modules/",
 )

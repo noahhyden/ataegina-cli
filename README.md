@@ -25,26 +25,6 @@ never shares schema or data.
 
 Named after the Lusitanian goddess of rebirth.
 
-## Contents
-
-- [The problem](#the-problem)
-- [What it ships](#what-it-ships)
-- [Agent-native](#agent-native)
-- [Install](#install)
-- [Quickstart](#quickstart)
-- [Platforms](#platforms)
-- [Commands](#commands)
-- [How the launcher works](#how-the-launcher-works)
-  - [Per-worktree databases](#per-worktree-databases)
-  - [Scope-aware startup](#scope-aware-startup)
-  - [Diagnostics](#diagnostics)
-  - [Configuration keys](#configuration-keys)
-- [Updating](#updating)
-- [Requirements](#requirements)
-- [Contributing](#contributing)
-- [Security](#security)
-- [License](#license)
-
 ## The problem
 
 The moment you run more than one copy of a repo at once — a few AI coding agents
@@ -244,7 +224,7 @@ Flag / env:
 | Flag / env var | Effect |
 |---|---|
 | `ataegina --version` / `-v` | Print the version and exit |
-| `ataegina --help` / `-h` | Print full usage and exit (also available as `man ataegina` when installed via `install.sh`) |
+| `ataegina --help` / `-h` | Print full usage and exit |
 | `ATE_INDEX=<n>` | Force a specific index for one invocation (bypass auto-assign) |
 | `ATE_CONFIG=<path>` | Use an explicit config file path |
 | `ATE_REGISTRY_DIR` | Override the registry root (per-repo files go under its `repos/`) |

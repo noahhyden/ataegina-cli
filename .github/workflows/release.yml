@@ -71,10 +71,10 @@ jobs:
         run: |
           if [ -n "$NOTES" ]; then
             printf '%s\n' "$NOTES" > /tmp/relnotes.md
-            gh release create "$TAG" ataegina ataegina.sha256 ataegina.1 \
+            gh release create "$TAG" ataegina ataegina.sha256 \
               --title "$TAG" --notes-file /tmp/relnotes.md
           else
-            gh release create "$TAG" ataegina ataegina.sha256 ataegina.1 \
+            gh release create "$TAG" ataegina ataegina.sha256 \
               --title "$TAG" --generate-notes
           fi
 
