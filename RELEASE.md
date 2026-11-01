@@ -54,21 +54,19 @@ Run from the repo root, working tree clean.
    gh release create vX.Y.Z ataegina ataegina.sha256 --title "vX.Y.Z" --notes "..."
    ```
 
-6. **The Homebrew formula is bumped automatically** *when a `HOMEBREW_TAP_TOKEN`
-   repo secret is configured* (a PAT with `contents:write` on
-   `noahhyden/homebrew-tap`). The `homebrew` job points `Formula/ataegina.rb`'s
-   `url` at the new release asset and sets `sha256` to the script's digest, then
-   commits and pushes. Without the secret the job self-skips and you must bump the
-   formula manually:
+6. **The Homebrew formula bumps itself.** A `Bump ataegina` workflow *in the tap
+   repo* polls this repo's public releases API on a schedule, rewrites
+   `Formula/ataegina.rb`'s `url`, `sha256` and `version`, and pushes to its own
+   repo with the built-in `GITHUB_TOKEN`. **No PAT is involved** — the previous
+   design pushed from here into the tap, which needed a cross-repo token that
+   expired silently and broke the v1.1.0 release.
 
-   ```sh
-   # in noahhyden/homebrew-tap: point url at the new tag, set sha256 to:
-   awk '{print $1}' ataegina.sha256
-   ```
+   Nothing to do per release. To publish without waiting for the schedule, run
+   the workflow from the tap's Actions tab (`workflow_dispatch`). It is a no-op
+   when the formula already matches the latest tag.
 
-   `brew style` and `brew audit --formula noahhyden/tap/ataegina` must pass.
    The `curl | sh` and `ataegina update` paths track `latest` automatically and
-   need no per-release edit.
+   need no per-release edit either.
 
 ## Verify before announcing
 

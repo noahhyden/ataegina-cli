@@ -1,6 +1,6 @@
 name: Release
 
-# On a vX.Y.Z tag: re-verify VERSION/checksum, publish the Release, bump the Homebrew tap; regeneration stays manual (RELEASE.md).
+# On a vX.Y.Z tag: re-verify VERSION/checksum and publish the Release. The Homebrew tap bumps itself from this repo's public releases API (see RELEASE.md).
 
 on:
   push:
@@ -77,66 +77,3 @@ jobs:
             gh release create "$TAG" ataegina ataegina.sha256 \
               --title "$TAG" --generate-notes
           fi
-
-  # Bump the Homebrew tap formula; self-skips when HOMEBREW_TAP_TOKEN is not configured.
-  homebrew:
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check for a tap token
-        id: gate
-        env:
-          TOK: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          if [ -n "$TOK" ]; then
-            echo "have=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "have=false" >> "$GITHUB_OUTPUT"
-            echo "no HOMEBREW_TAP_TOKEN secret; skipping the tap bump (do it manually per RELEASE.md)"
-          fi
-
-      - name: Check out the tap
-        if: steps.gate.outputs.have == 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: noahhyden/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: tap
-
-      - name: Point the formula at the new release
-        if: steps.gate.outputs.have == 'true'
-        env:
-          TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          formula="tap/Formula/ataegina.rb"
-          if [ ! -f "$formula" ]; then
-            echo "::error::$formula not found in the tap; bump it manually (see RELEASE.md)"
-            exit 1
-          fi
-          # The formula downloads the release's `ataegina` asset; its sha256 is the
-          # digest of that exact file, which equals sha256 of the tag's raw script.
-          url="https://github.com/$REPO/releases/download/$TAG/ataegina"
-          sha="$(curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/ataegina" | sha256sum | awk '{print $1}')"
-          echo "new url:    $url"
-          echo "new sha256: $sha"
-          sed -i -E "s|^([[:space:]]*url[[:space:]]+\").*(\")|\1$url\2|" "$formula"
-          sed -i -E "s|^([[:space:]]*sha256[[:space:]]+\").*(\")|\1$sha\2|" "$formula"
-          echo "---- updated formula ----"
-          grep -E '^[[:space:]]*(url|sha256)[[:space:]]+"' "$formula" || true
-
-      - name: Commit and push the formula bump
-        if: steps.gate.outputs.have == 'true'
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          cd tap
-          git config user.name "ate release bot"
-          git config user.email "ci@example.com"
-          if git diff --quiet; then
-            echo "formula already up to date; nothing to commit"
-            exit 0
-          fi
-          git add Formula/ataegina.rb
-          git commit -m "ataegina $TAG"
-          git push
