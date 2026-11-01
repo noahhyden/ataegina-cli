@@ -13,17 +13,17 @@ line but were not separately git-tagged.
 
 ### Changed
 
-- **Relicensed from MIT to Apache License 2.0.** `LICENSE` is the verbatim
-  Apache 2.0 text with only the appendix copyright line filled in, so it still
-  resolves as Apache-2.0 to SPDX and GitHub. Apache 2.0 adds an express patent
-  grant and a patent-retaliation clause that MIT has not, and its §6 withholds
-  trademark rights.
-- **Trademarks are reserved in a new `NOTICE` file.** "ataegina",
-  "ataegina-cli", the name "noahhyden", and any associated logo or wordmark are
-  not licensed with the code. Apache §4(d) requires redistributors to carry
-  `NOTICE` forward, so the reservation follows forks. Describing a project as
-  built on or compatible with ataegina is fine; naming a fork after it, or
-  implying endorsement, is not.
+- **Relicensed from MIT to Apache License 2.0** (`LICENSE`), with a trademark
+  reservation in a new `NOTICE` file: the name *ataegina*, the repository name
+  *ataegina-cli*, the name *Noah Hyden*, and the project's logos are not
+  licensed under it. `LICENSE` is the verbatim Apache 2.0 text with only the
+  appendix copyright line filled in, so it still resolves as Apache-2.0 to SPDX
+  and GitHub. The code is as free to fork as before — a fork simply needs its
+  own name. Sole copyright holder, so no third-party consent was required, and
+  releases published before the move (up to and including v1.0.1) keep the MIT
+  terms they shipped under. `TRADEMARKS.md` spells out what is fine without
+  asking (nominative use, forking) and what needs permission (branding a
+  product, publishing a package under the name, implying endorsement).
 
 - **`ataegina update` now delegates to `install.sh` instead of reimplementing
   it.** The launcher carried a second copy of the installer's whole flow —

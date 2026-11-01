@@ -601,12 +601,15 @@ not a public issue.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE). There is no EULA and no
-click-through: the LICENSE file is the license.
+[Apache License 2.0](LICENSE). There is no EULA and no click-through: the
+LICENSE file is the license.
 
-The trademarks are not covered by it. "ataegina", "ataegina-cli", the name
-"noahhyden", and any associated logo or wordmark are reserved — see
-[NOTICE](NOTICE). You can fork, build on, and say your project is compatible
-with ataegina; you cannot name your fork after it or imply endorsement.
+The name **ataegina**, the name of this repository **ataegina-cli**, the name
+**Noah Hyden**, and the project's logos are trademarks and are *not* covered by
+that licence — see [TRADEMARKS.md](TRADEMARKS.md) for what's fine without
+asking, and [NOTICE](NOTICE). Fork the code freely; just give your fork its own
+name.
+
+Releases up to and including v1.0.1 keep the MIT terms they shipped under.
 
 ataegina imposes no terms of its own.

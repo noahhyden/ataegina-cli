@@ -1,29 +1,31 @@
 ataegina
-Copyright 2026 noahhyden
+Copyright 2026 Noah Hyden
 
-This product is licensed under the Apache License, Version 2.0. See the LICENSE
-file in the root of this repository for the full terms.
+This product is licensed under the Apache License, Version 2.0. You may obtain
+a copy of the License in the LICENSE file in this repository, or at:
 
---------------------------------------------------------------------------------
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Releases published before the move to Apache 2.0 — up to and including v1.0.1 —
+shipped under the MIT License and keep the terms they were released under.
+Every contribution to this repository to date is the work of the copyright
+holder named above.
+
+
 TRADEMARKS
---------------------------------------------------------------------------------
 
-"ataegina" and "ataegina-cli" (the names of this project and this repository),
-the name "noahhyden", and any ataegina or noahhyden logo, wordmark, icon or
-other brand feature are trademarks of noahhyden. They are NOT licensed under
-the Apache License, Version 2.0.
+Section 6 of the Apache License, Version 2.0 does not grant permission to use
+the trade names, trademarks, service marks, or product names of the Licensor,
+except as required for reasonable and customary use in describing the origin
+of the Work and reproducing the content of this NOTICE file.
 
-Section 6 of that License grants no permission to use these marks. Nothing in
-the License, and nothing in this NOTICE, transfers any right in them.
+The name "ataegina", the name of this repository "ataegina-cli", the name
+"Noah Hyden", and the project's logos are trademarks of Noah Hyden and are NOT
+licensed under the Apache License, Version 2.0. Nominative use ("built on
+ataegina", "a fork of ataegina") is fine; branding your own product or
+implying endorsement is not.
 
-You MAY use the marks for reasonable and customary use in describing the origin
-of this work -- for example, stating that your project is built on, forked
-from, or compatible with ataegina, or giving attribution as required above.
-
-You MAY NOT use the marks as, or as part of, the name of a fork, distribution,
-package, product, service, domain name, or organisation, nor in any way that
-states or implies endorsement, sponsorship, or affiliation, without prior
-written permission from the trademark owner. A fork that keeps the marks in its
-own name must rename.
-
-All rights in the marks are reserved.
+See TRADEMARKS.md for what is permitted without asking and what needs
+permission. A fork distributed under a different name remains fully permitted
+by the Apache License, Version 2.0 — this reservation restricts use of the
+names and logos only, never the code.
