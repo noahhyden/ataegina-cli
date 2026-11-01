@@ -182,7 +182,7 @@ lives in. It never auto-updates. Load completions with
 ## Requirements
 
 - `bash` 3.2+ (the macOS system shell works as-is), `git`, `awk`.
-- A port backend: `lsof` preferred, falling back to `ss`, `fuser`, or a
+- A port backend: `lsof` preferred, falling back to `ss` or a
   `/proc/net/tcp` parse, auto-detected. Force one with `ATE_PORT_TOOL`.
 - `curl` or `wget`, and `shasum` or `sha256sum`, for `update` and `install.sh`.
 

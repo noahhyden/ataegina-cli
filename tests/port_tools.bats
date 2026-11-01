@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Port-backend variants (ate_port_tool / ate_port_listening / ate_port_pids /
 # ate_port_proc_desc / _ate_proc_listening). The rest of the suite only ever uses
-# `none` or `lsof`; this drives the ss / fuser / proc branches with fake `ss`/`fuser`
+# `none` or `lsof`; this drives the ss / proc branches with a fake `ss`
 # stubs on PATH (deterministic, no real sockets) and the proc branch against the real
 # /proc/net/tcp with a real listener. Exercised through `ate doctor`, which calls the
 # whole chain via doctor_port_check.
@@ -34,14 +34,6 @@ case "$flags" in
 esac
 EOF
   chmod +x "$BIN/ss"
-}
-make_fake_fuser() {
-  cat > "$BIN/fuser" <<'EOF'
-#!/usr/bin/env bash
-# fuser PORT/tcp -> pids on stdout for our FAKE_PORT.
-case "$1" in "${FAKE_PORT:-0}/tcp") echo "  4242" ;; *) exit 1 ;; esac
-EOF
-  chmod +x "$BIN/fuser"
 }
 doctor() {
   run env PATH="$BIN:$PATH" "$@" \
@@ -87,16 +79,6 @@ EOF
   echo "$output" | grep -qi "backend port :$BE in use"
 }
 
-@test "fuser backend: doctor reports the slot in use via fuser" {
-  make_fake_fuser
-  cd "$REPO"
-  doctor ATE_PORT_TOOL=fuser FAKE_PORT="$BE"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -qi "port tool: fuser"
-  echo "$output" | grep -qi "backend port :$BE in use"
-  echo "$output" | grep -q "4242"
-}
-
 @test "proc backend: /proc/net/tcp detects a real listener (pid unknown)" {
   command -v python3 >/dev/null 2>&1 || skip "python3 required"
   [ -r /proc/net/tcp ] || skip "/proc/net/tcp not readable"
@@ -128,9 +110,9 @@ PY
 }
 
 @test "an override for a tool that is not installed falls back to auto-detect" {
-  # Ask for fuser but do NOT provide it; ate_port_tool must fall through to detect.
+  # An unrecognised value must fall through to auto-detect, not wedge the probe.
   cd "$REPO"
   doctor ATE_PORT_TOOL=fuser
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qiE "port tool: (lsof|ss|fuser|proc|none)"
+  echo "$output" | grep -qiE "port tool: (lsof|ss|proc|none)"
 }

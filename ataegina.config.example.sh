@@ -47,7 +47,7 @@ LOG_DIR_BASE=/tmp/ate-wt
 # needed, pointing any surface it does not run locally at the shared default
 # server in the primary checkout (frontend FRONT_PORT_BASE, backend
 # BACK_PORT_BASE). The primary (index 0) is always `both`. Override per run with
-# `ataegina up --scope X`, or with a `scope:` line in $ATE_TASK_FILE if you set it.
+# `ataegina up --scope X`.
 # Set this to 0 to disable detection and always start `both` (the pre-scope
 # behavior). See the "Scope-aware startup" section of the README.
 # ATE_SCOPE_AUTO=1
@@ -59,17 +59,17 @@ LOG_DIR_BASE=/tmp/ate-wt
 # `dev`) and the auto-resolution picks the wrong one.
 # ATE_BASE_BRANCH='dev'
 #
-# When `up` AUTO-detects scope (no --scope, no `scope:` field) and the diff is
+# When `up` AUTO-detects scope (no --scope) and the diff is
 # empty, the raw scope is `none`; rather than start nothing, `up` nudges it to
-# `both` and logs a hint. An explicit `--scope none` / `scope: none` still means
+# `both` and logs a hint. An explicit `--scope none` still means
 # none. (No knob; documented here so the behavior is not surprising.)
 
 # Port-detection backend. ataegina probes "is this port up / who holds it" to
 # guard `up`, to kill by port on `down`, and to report holders in `doctor`. It
-# auto-detects a backend in this order: lsof, ss (iproute2), fuser, then parsing
+# auto-detects a backend in this order: lsof, ss (iproute2), then parsing
 # /proc/net/tcp (Linux, listening-detection only), else none. lsof is often
 # absent on minimal Debian/Ubuntu; installing lsof or iproute2 (ss) is enough.
-# Force a specific backend if you must (values: lsof|ss|fuser|proc|none); an
+# Force a specific backend if you must (values: lsof|ss|proc|none); an
 # unavailable choice falls back to auto-detect. `ataegina doctor` prints which
 # backend is active. With `none`, port checks are degraded (up still starts).
 # ATE_PORT_TOOL=lsof
@@ -126,7 +126,7 @@ BACKEND_CMD='uv run uvicorn main:app --port $BACKEND_PORT'
 # `down` never drops a DB, so your data persists across restarts.
 #
 # DB_NAME=myapp                              # set this to enable the feature
-# DB_KIND=postgres                           # postgres | mysql | sqlite | custom
+# DB_KIND=postgres                           # postgres | mysql | sqlite
 # DB_SUFFIX=_wt                              # worktree DB = DB_NAME + DB_SUFFIX + N
 # DB_URL_TEMPLATE='postgres://localhost:5432/$ATE_DB_NAME'   # expanded per tree
 # DB_URL_VAR=DATABASE_URL                    # env var the URL is injected into
@@ -174,7 +174,7 @@ BACKEND_CMD='uv run uvicorn main:app --port $BACKEND_PORT'
 # }
 
 # Stop hooks are optional. The defaults kill whatever is bound to this tree's
-# ports, using the resolved port backend (lsof/ss/fuser) to find the pids;
+# ports, using the resolved port backend (lsof/ss/proc) to find the pids;
 # override them only if `ataegina down` should do something else. The helpers
 # ate_port_pids / ate_port_listening are available to your override.
 # ate_stop_backend() {

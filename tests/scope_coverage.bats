@@ -1,7 +1,5 @@
 #!/usr/bin/env bats
-# resolve_scope branches not hit elsewhere: a declared `scope:` line in
-# $ATE_TASK_FILE, and ATE_SCOPE_AUTO=0 (auto-detect disabled -> both). Both only
-# apply to a NON-primary worktree (index != 0). Hermetic (`true` servers, none tool).
+# resolve_scope branch not hit elsewhere: ATE_SCOPE_AUTO=0 (auto-detect disabled -> both), which only applies to a NON-primary worktree. Hermetic.
 
 load helper
 
@@ -22,14 +20,6 @@ up_wt() {
   cd "$wt"
   run env ATE_REGISTRY_DIR="$ATE_TMP/registry" ATE_PORT_TOOL=none \
     LOG_DIR_BASE="$ATE_TMP/logs/ate-wt" "$@" bash "$ATE_SCRIPT" up
-}
-
-@test "up honors a declared scope: line in ATE_TASK_FILE" {
-  local wt; wt="$(add_worktree "$REPO" wtDecl)"
-  printf 'scope: frontend\n' > "$ATE_TMP/task.md"
-  up_wt "$wt" ATE_TASK_FILE="$ATE_TMP/task.md"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -qi "scope: frontend"
 }
 
 @test "up with ATE_SCOPE_AUTO=0 on a worktree falls back to both" {

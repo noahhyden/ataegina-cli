@@ -11,6 +11,31 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+### Removed
+
+- **The `$ATE_TASK_FILE` scope source.** A `scope:` line in a task file was a
+  fourth input to scope resolution that nothing ever set; `--scope` covers the
+  same need explicitly. `ate_task_scope_field` and the `declared` branch are
+  gone, and `RESOLVED_SCOPE_SOURCE` no longer takes that value.
+- **The `fuser` port backend.** It sat between `ss` and the `/proc/net/tcp`
+  parse and added no coverage either lacks — a box with psmisc effectively
+  always has iproute2 or a readable `/proc`. `ATE_PORT_TOOL` now takes
+  `lsof|ss|proc|none`; an unrecognised value still falls through to
+  auto-detect rather than wedging the probe.
+- **`DB_KIND=custom` as a documented value.** It had no branch, so it behaved
+  exactly like a typo. Any unrecognised kind still works the same way: supply
+  `DB_CREATE_CMD` / `DB_DROP_CMD`, or define the `ate_db_*` hooks. The docs now
+  say that instead of implying `custom` is special.
+
+### Changed
+
+- **`REGISTRY` is resolved in one place.** Its startup default duplicated
+  `ate_registry_file`'s `ATE_REGISTRY`-then-default precedence and was
+  overwritten before any command body ran, so the path it named was never
+  created.
+- **`config_defines_hook` folded into its single call site**, which is one
+  `declare -F` in `doctor`.
+
 ## [1.1.0] - 2026-11-01
 
 ### Changed
