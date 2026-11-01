@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/noahhyden/ataegina-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/noahhyden/ataegina-cli/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/noahhyden/ataegina-cli?sort=semver)](https://github.com/noahhyden/ataegina-cli/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Shell: bash 3.2+](https://img.shields.io/badge/shell-bash%203.2%2B-1f425f.svg)](#requirements)
 [![Platforms: macOS · Linux · WSL2](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-success.svg)](#platforms)
 
@@ -586,22 +586,27 @@ keep it that way. Before opening a pull request, read
 [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules, the development setup,
 and how to run the test suite (`bats tests/`) and the linter (`shellcheck`).
 Bug reports and feature requests go through the
-[issue templates](https://github.com/noahhyden/ataegina-cli/issues/new/choose);
-everyone is expected to follow the
-[Code of Conduct](CODE_OF_CONDUCT.md). Changes are recorded in
-[CHANGELOG.md](CHANGELOG.md).
+[issue templates](https://github.com/noahhyden/ataegina-cli/issues/new/choose).
+Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 
 ataegina downloads and replaces an executable script during `update`, so its
 integrity story matters. Every download is SHA-256 verified and `bash -n`
 parse-checked, and the config file is sourced bash that runs with your
-privileges — so only run ataegina in repositories you trust. The full trust
-model and how to report a vulnerability are in [SECURITY.md](SECURITY.md).
+privileges — so only run ataegina in repositories you trust. Report a
+vulnerability privately through
+[GitHub security advisories](https://github.com/noahhyden/ataegina-cli/security/advisories/new),
+not a public issue.
 
 ## License
 
-MIT. See [LICENSE](LICENSE). There is no EULA and no click-through: the LICENSE
-file is the license.
+Apache License 2.0. See [LICENSE](LICENSE). There is no EULA and no
+click-through: the LICENSE file is the license.
+
+The trademarks are not covered by it. "ataegina", "ataegina-cli", the name
+"noahhyden", and any associated logo or wordmark are reserved — see
+[NOTICE](NOTICE). You can fork, build on, and say your project is compatible
+with ataegina; you cannot name your fork after it or imply endorsement.
 
 ataegina imposes no terms of its own.

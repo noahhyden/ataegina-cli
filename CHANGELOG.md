@@ -13,6 +13,18 @@ line but were not separately git-tagged.
 
 ### Changed
 
+- **Relicensed from MIT to Apache License 2.0.** `LICENSE` is the verbatim
+  Apache 2.0 text with only the appendix copyright line filled in, so it still
+  resolves as Apache-2.0 to SPDX and GitHub. Apache 2.0 adds an express patent
+  grant and a patent-retaliation clause that MIT has not, and its §6 withholds
+  trademark rights.
+- **Trademarks are reserved in a new `NOTICE` file.** "ataegina",
+  "ataegina-cli", the name "noahhyden", and any associated logo or wordmark are
+  not licensed with the code. Apache §4(d) requires redistributors to carry
+  `NOTICE` forward, so the reservation follows forks. Describing a project as
+  built on or compatible with ataegina is fine; naming a fork after it, or
+  implying endorsement, is not.
+
 - **`ataegina update` now delegates to `install.sh` instead of reimplementing
   it.** The launcher carried a second copy of the installer's whole flow —
   resolve the latest tag, download, verify SHA-256, `bash -n` parse-check,
@@ -45,6 +57,11 @@ line but were not separately git-tagged.
 
 ### Removed
 
+- `CODE_OF_CONDUCT.md` and `SECURITY.md`. Private vulnerability reporting is
+  unaffected — it already went through GitHub security advisories, which the
+  issue-template config still links, and the README still describes the trust
+  model (`update` verifies every download; the config file is sourced bash that
+  runs with your privileges).
 - **1381 lines of superseded documentation.** The `smart-ports`, `portability`
   and `onboarding-redesign` design docs and the three dogfooding logs described
   features that shipped in v0.5.0 through v1.0.0. `docs/design/agent-native.md`
