@@ -11,6 +11,8 @@ line but were not separately git-tagged.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-01
+
 ### Changed
 
 - **Relicensed from MIT to Apache License 2.0** (`LICENSE`), with the marks
