@@ -8,308 +8,70 @@
 [![Latest release](https://img.shields.io/github/v/release/noahhyden/ataegina-cli?sort=semver)](https://github.com/noahhyden/ataegina-cli/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Shell: bash 3.2+](https://img.shields.io/badge/shell-bash%203.2%2B-1f425f.svg)](#requirements)
-[![Platforms: macOS · Linux · WSL2](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-success.svg)](#platforms)
+[![Platforms: macOS · Linux · WSL2](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-success.svg)](#requirements)
 
 ![ataegina detecting a stack, then handing each worktree its own collision-free port slot](docs/demo.gif)
 
-Run a fleet of AI coding agents in parallel and they all fight over the same
-machine — same ports, same dev server, one shared database they stomp in
-unison. It's the same collision a human hits checking out three branches of a
-full-stack app at once. ataegina gives every agent — and every branch you check
-out — its own ports, processes, **and database**, collision-free, from one
-zero-dependency bash file. **No Docker, no daemon, no YAML.**
+Run several AI coding agents in parallel — or just check out three branches of a
+full-stack app — and they all fight over one machine: the same ports, the same
+dev server, one shared database they stomp in unison. The usual fixes cost a
+container per environment, a daemon, or a hand-written compose file per project.
 
-The per-worktree *database* deconfliction is the part nobody else does locally
-without a container: each worktree boots against its own DB, so parallel work
-never shares schema or data.
+ataegina gives every worktree a stable index `N` and derives everything
+collision-free from it:
 
-Named after the Lusitanian goddess of rebirth.
+- **Ports** — frontend `5173+N`, backend `8000+N`, sticky across runs, so
+  long-lived agents keep stable addresses.
+- **Database** — its own per-worktree DB, connection string injected, created on
+  `up`. Deconflicting the database on the bare host is the part that otherwise
+  needs a container.
+- **Processes + logs** — detached servers tracked per worktree; `up` / `down` /
+  `logs` act on exactly this tree's stack.
 
-## The problem
-
-The moment you run more than one copy of a repo at once — a few AI coding agents
-working in parallel worktrees, or just two feature branches side by side — the
-whole stack collides. Every worktree's dev server tries to bind the same ports
-(5173, 8000, whatever your stack uses), so the second to boot dies on "address
-already in use." They share one dev database, so they stomp each other's schema
-and data. And the background processes pile up untracked until you're hunting
-PIDs by hand.
-
-The usual fixes each cost something: containerize everything (Docker overhead,
-re-install deps per environment), run a daemon or a reverse proxy, or hand-write
-a Procfile / compose / Tilt file per project. ataegina takes none of that — it
-makes N worktrees coexist on the bare host with one small launcher.
-
-## What it ships
-
-`ataegina` is a worktree-aware dev launcher. It gives every git worktree a stable
-index N and derives everything collision-free from it:
-
-- **Ports** — frontend `5173+N`, backend `8000+N`: predictable and sticky across
-  runs, so long-lived worktrees keep stable addresses.
-- **Database** — a separate per-worktree database, its connection string injected,
-  created on `up`. The primary checkout keeps your shared dev DB.
-- **Processes + logs** — detached dev servers tracked per worktree; `up` / `down`
-  / `logs` act on exactly this tree's stack, nothing else's.
-
-`ataegina init` detects your stack and writes the config; from then on
-`ataegina up` brings this tree's whole stack up on its own slot. You keep your
-own start commands — ataegina does the deconfliction and the bookkeeping.
-
-## Agent-native
-
-Every read command speaks JSON, and `up` can block until the servers actually
-answer — so a supervising agent gates on real state, not a poll loop.
-
-![an agent claiming a slot with `ataegina up --wait --json`, then reading the fleet as JSON](docs/agents.gif)
-
-- **`ataegina up --wait --json`** — claim the slot, block until every server it
-  launched is accepting connections, then emit one machine-readable slot object
-  (`ports` shape plus `started` and per-surface `ready`). Exit `75` if anything
-  isn't ready by the deadline, so `ataegina up --wait && curl "$BACKEND_URL"`
-  needs no sleep loop.
-- **`ataegina status --json`** / **`ports --json`** — the same slot shape for any
-  worktree, with live `state` + `pid`. The query an agent runs before acting.
-- **`ataegina list --json`** — the whole fleet in one array, each entry tagged
-  `stale` / `live`. The view a supervising agent uses to see all its workers.
-- **`ataegina doctor --json`** — structured diagnostics (`{status, summary,
-  checks[]}`) with a nonzero exit on failure, so it doubles as a CI gate.
+You keep your own start commands. ataegina does the deconfliction and the
+bookkeeping. Named after the Lusitanian goddess of rebirth.
 
 ## Install
 
-ataegina is a single bash file. Installing it never requires `sudo`: it lives
-under your home directory and writes only there.
-
-**Homebrew (macOS / Linuxbrew).** Install and upgrade from the tap:
+Never needs `sudo`; it lives under your home directory and writes only there.
 
 ```bash
-brew install noahhyden/tap/ataegina
+brew install noahhyden/tap/ataegina                                              # Homebrew
+curl -fsSL https://raw.githubusercontent.com/noahhyden/ataegina-cli/main/install.sh | sh   # or curl
 ```
 
-This installs the `ataegina` binary and an `ate` shortcut; `brew upgrade` picks
-up new releases.
-
-**One command (curl).** No Homebrew required:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/noahhyden/ataegina-cli/main/install.sh | sh
-```
-
-The installer downloads the latest released `ataegina` into `~/.local/bin`,
-verifies its SHA-256 (when a checksum is published), `bash -n` parse-checks it,
-makes it executable, and prints the exact PATH line to add if `~/.local/bin` is
-not already on your PATH. It never uses `sudo` and never edits your shell rc for
-you. Override the install dir with `ATE_BIN` (or `PREFIX`). The installer is a
-small, readable file: read it before you pipe it to a shell if you prefer.
-
-**Manual single file (no sudo).** Download, make executable, and put it anywhere
-on your PATH:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/noahhyden/ataegina-cli/main/ataegina
-chmod +x ataegina
-mv ataegina ~/.local/bin/        # or any dir already on your PATH
-```
-
-If `~/.local/bin` is not on your PATH, add it (zsh shown; use `~/.bashrc` for
-bash) and restart your shell:
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-```
-
-Optional but recommended short alias:
-
-```bash
-echo "alias ate='ataegina'" >> ~/.zshrc   # or ~/.bashrc
-```
-
-You never need `sudo` for any of these paths. (You *may* symlink the file into a
-system dir like `/usr/local/bin` yourself, but that is your choice, not a
-requirement.)
+Homebrew installs `ataegina` plus an `ate` shortcut and `brew upgrade` tracks
+releases. The installer puts `ataegina` in `~/.local/bin` (override with
+`ATE_BIN`), verifying its SHA-256 and `bash -n` parse-checking it first; if that
+directory is not on your PATH it prints the line to add, and it never edits your
+rc file for you. For the short name, `alias ate='ataegina'`.
 
 ## Quickstart
 
 ```bash
-# 1. Configure your stack. `init` detects it and writes ataegina.config.sh.
-ataegina init               # interactive: confirm each detected value
-# ataegina init --yes       # accept all detected values (no prompts; CI/scripts)
-# ataegina init --dry-run    # preview the config without writing it
-
-# 2. In any worktree, start its dev servers on a collision-free port slot.
-cd ../my-feature-worktree
-ataegina up
-ataegina ports     # show this tree's index + urls
+ataegina init        # detects your stack, writes ataegina.config.sh (--yes to skip prompts)
+cd ../my-worktree
+ataegina up          # start this tree's stack on its own slot
+ataegina ports       # show this tree's index + urls
 ```
 
-`ataegina init` probes for your frontend and backend (Next, Nuxt, Astro,
-SvelteKit, Vite, CRA on the frontend; uv/poetry, Django, Rails, Express/Nest,
-Go, Rust/Cargo, PHP/Laravel on the backend), derives a
-per-slot start command for each (overriding any port pinned in a `dev` script),
-and writes a declarative `ataegina.config.sh`. It is interactive by default
-(each detected value is offered as the prompt default, empty input accepts it);
-`--yes` / `--non-interactive` (and any non-tty stdin) skips the prompts. An
-undetected stack gets a clearly-commented TODO template instead. Print the
-version with `ataegina --version`.
-
-The primary checkout is index 0. Each additional worktree gets the next free
-index N, and:
+The primary checkout is index 0; each additional worktree gets the next free
+index, and keeps it across runs:
 
 ```
 frontend port = FRONT_PORT_BASE + N   (default 5173 + N)
 backend  port = BACK_PORT_BASE  + N   (default 8000 + N)
-log dir       = LOG_DIR_BASE + N       (default /tmp/ate-wtN)
+log dir       = LOG_DIR_BASE + N      (default /tmp/ate-wtN)
 ```
 
-The mapping is sticky: a worktree keeps the same index (and therefore the same
-ports) across runs, so long-lived background agents keep stable addresses.
+`init` probes for Next, Nuxt, Astro, SvelteKit, Vite and CRA on the frontend,
+and uv, Django, Rails, Express/Nest, Go, Cargo and Laravel on the backend. An
+undetected stack gets a commented TODO template.
 
-## Platforms
+## Configuration
 
-ataegina is plain bash 3.2 with no bash-4-only constructs, so it runs on the
-macOS system shell as-is and on Linux natively. The portability story is not the
-shell dialect, it is the external tools it shells out to for port operations.
-`git` is required everywhere; a port backend (`lsof`, `ss`, `fuser`, or a
-`/proc/net/tcp` parse) is auto-detected, so a box missing `lsof` still works as
-long as one of those is present.
-
-- **Linux: full.** A developer box with `lsof` is full support. A minimal
-  Debian/Ubuntu image may lack `lsof`; ataegina then falls back to `ss`
-  (iproute2, near-universal), `fuser`, or a `/proc/net/tcp` parse. If you want
-  the simplest path, `apt-get install lsof`.
-- **macOS: full.** Works on the system `/bin/bash` 3.2; no Homebrew bash needed.
-  `lsof` and `git` ship with the OS / Xcode command-line tools.
-- **Windows: WSL2 is full and recommended.** Inside WSL2 it is just Linux (same
-  `lsof` note as above). Git Bash / MSYS2 is partial: the launcher bookkeeping
-  and `init` work, but detached process tracking (so dev servers outlive the
-  shell, pid-liveness checks) is unreliable under the MSYS layer, so prefer
-  WSL2. Native PowerShell / cmd is not supported (it is a bash program end to
-  end).
-
-| Feature | macOS | Linux (lsof) | Linux (minimal) | WSL2 | Git Bash / MSYS2 | PowerShell / cmd |
-|---|---|---|---|---|---|---|
-| launcher (`up`/`down`/`ports`/`list`/`prune`) | full | full | partial (port ops via `ss`/`fuser`/`proc` fallback) | full | partial | no |
-| init (scaffolder) | full | full | full | full | full | no |
-| doctor (read-only) | full | full | partial (port checks via fallback) | full | partial | no |
-
-"partial" on a minimal Linux box collapses to "full" the moment `lsof` is
-installed (or whenever `ss`/`fuser`/`/proc` is available, which is almost
-always).
-
-### Commands
-
-| Command | What it does |
-|---|---|
-| `ataegina init [options]` | Detect your stack and write a declarative `ataegina.config.sh` (interactive by default; `--yes`, `--dry-run`, `--force`, `--frontend-dir`, `--backend-dir`) |
-| `ataegina up [both\|backend\|frontend] [--scope X] [--wait[=SECONDS]] [--json]` | Start dev servers (default `both`) on this tree's port slot; `--scope frontend\|backend\|both\|none` forces the start scope (see "Scope-aware startup"). `--wait` blocks until every server it launched is accepting connections (up to `SECONDS`, default 60 or `ATE_UP_WAIT`) and exits `75` if any isn't ready by then — so an agent can `ataegina up --wait && curl "$BACKEND_URL/health"` with no poll loop. `--json` prints one machine-readable slot object (the `ports` shape plus `started` and per-surface `ready`) on stdout with all human output on stderr; combine with `--wait` for a true `ready`. If the slot is already held by a process ataegina didn't launch, it says so and declines rather than implying success |
-| `ataegina down [both\|backend\|frontend] [--force]` | Stop them (kills by port, and by the pid it launched so nothing orphans). Leaves a slot held by a process ataegina didn't start alone; `--force` (or `ATE_DOWN_FORCE=1`) reaps it anyway |
-| `ataegina restart [both\|backend\|frontend] [--scope X]` | Bounce this tree's servers: a `down` then an `up`. Args forward to `up` (which resolves the scope); the stop phase mirrors the mode word, so `restart backend` bounces only the backend |
-| `ataegina logs [both\|backend\|frontend] [-n N] [--no-follow]` | Follow this tree's server logs live (scoped to the current worktree) |
-| `ataegina db [name\|url\|create\|drop]` | Inspect/manage this tree's database (when `DB_NAME` is set) |
-| `ataegina ports [--json]` | Print this tree's index, ports, and urls. `--json` emits a single machine-readable line (index, repo_root, frontend/backend port+url, log_dir, and the per-worktree db name+url when configured) for agents and scripts to parse |
-| `ataegina status [--json]` | Read-only liveness for this tree — is my stack up, and where? Per surface reports `running` (a live server ataegina launched holds the port), `foreign` (something else holds it), `unknown` (held but unverifiable), or `stopped`. Never mutates and exits 0 regardless of state; `--json` folds `state`+`pid` into the slot shape. The query an agent runs before acting |
-| `ataegina open [frontend\|backend]` | Open this tree's URL in a browser (default `frontend`). Opener: `$BROWSER`, else `xdg-open` (Linux), else `open` (macOS); prints the URL if none is available |
-| `ataegina env [--no-export]` | Print this tree's derived environment (index, ports, URLs, log dir, and the per-worktree DB name + URL when configured) as eval-able shell — the same variables `up` injects into your servers. `eval "$(ataegina env)"` reproduces it in your own shell; `--no-export` drops the `export ` prefix for `> .env` |
-| `ataegina exec [--] CMD [args...]` | Run `CMD` with this tree's derived environment injected (same vars as `env`), inheriting stdio and the current directory, exiting with `CMD`'s status. The one-shot form of `eval "$(ataegina env)"` — e.g. `ataegina exec -- pytest` or `ataegina exec -- psql "$DATABASE_URL"` |
-| `ataegina move N` | Relocate this worktree to index `N` (and its derived port slot); stops the old slot's servers, refuses an index another live worktree holds, and rejects index 0 |
-| `ataegina list [--json]` | List every registered worktree (flags stale entries). `--json` emits a JSON array of the slot shape per worktree (primary first) plus `stale` (its directory is gone) and `live` (coarse best-effort: a derived port is listening) — the fleet view a supervising agent uses to see all its workers at once |
-| `ataegina prune` | Drop registry entries whose worktree directory is gone |
-| `ataegina doctor [--json]` | Run read-only diagnostics for this tree (never mutates; nonzero exit on a hard failure, so it works as a CI gate). `--json` emits `{status, summary:{ok,warn,fail}, checks:[{level,message}]}` on stdout (human lines to stderr) so an agent can see *which* check failed, not just the exit code |
-| `ataegina config <get\|set\|list\|unset\|path> [...]` | Read or change config values without opening the file (see "Configuration") |
-| `ataegina update` | Self-replace with the latest published release, by running `install.sh` (see "Updating") |
-| `ataegina completion <bash\|zsh>` | Print a shell completion script (subcommands + common args) to stdout. Load it with `source <(ataegina completion bash)` (or `zsh`); needs no worktree |
-
-Flag / env:
-
-| Flag / env var | Effect |
-|---|---|
-| `ataegina --version` / `-v` | Print the version and exit |
-| `ataegina --help` / `-h` | Print full usage and exit |
-| `ATE_INDEX=<n>` | Force a specific index for one invocation (bypass auto-assign) |
-| `ATE_CONFIG=<path>` | Use an explicit config file path |
-| `ATE_REGISTRY_DIR` | Override the registry root (per-repo files go under its `repos/`) |
-| `ATE_REGISTRY` | Pin one explicit registry file, shared across repos (overrides the per-repo default) |
-| `ATE_UP_WAIT=<seconds>` | Default timeout for a bare `up --wait` (default 60); `--wait=N` overrides it per invocation |
-
-**Configuration.** The config lives in `ataegina.config.sh`, but you rarely open
-it: `ataegina init` writes it for you, and `ataegina config set/get/list` reads
-and changes values from the command line. `ataegina config set FRONTEND_CMD '...'`
-fixes a detected value, `ataegina config get BACK_PORT_BASE` reads one,
-`ataegina config list` shows the effective values, `ataegina config unset KEY`
-removes one, and `ataegina config path` prints which file won resolution. The
-file stays the source of truth (it is sourced bash, so `*_CMD` values can still
-reference `$FRONTEND_PORT` and you can still define hook functions in it); the
-subcommand just means the common post-`init` tweaks need no text editor.
-
-## How the launcher works
-
-The launcher anchors on the worktree you run it *from* (`$PWD`'s git toplevel),
-not on where the script lives, so you can keep one copy on your PATH and it does
-the right thing in every checkout.
-
-**Stable index assignment.** Indices live in a tab-separated registry (one
-`index<TAB>path` line per worktree). The registry is **per repo**: each primary
-checkout gets its own file under `~/.config/ataegina/repos/<key>`, where `<key>`
-is the primary's directory name plus a portable digest of its path. Two unrelated
-repos therefore never share an index space, so each one's primary is index 0 and
-worktree indices never leak between repos. The next index handed out within a
-repo is the lowest positive integer not currently claimed; because the mapping
-persists, the same tree always gets the same ports. Set `ATE_REGISTRY` to pin a
-single explicit registry file (shared across repos) instead.
-
-**Index recycling.** Deleting a worktree does not clear its registry entry, so
-slots slowly accumulate. `list` flags entries whose path no longer exists;
-`prune` removes them, freeing those indices for the next new worktree to reuse.
-
-**Relocating a worktree.** If an auto-assigned slot lands on a port some other
-process permanently holds (so the derived port can never bind), `ataegina move N`
-moves this worktree to index `N` and its port pair, rewriting the registry. It
-stops the old slot's servers first (so nothing orphans on the old ports),
-refuses an index another live worktree already holds, rejects index 0 (reserved
-for the primary), and warns if either new port is already in use.
-
-**You own the servers, but you rarely write bash.** ataegina does not assume a
-stack. It exports a small, predictable environment, then starts each server:
-
-```
-ATE_INDEX               this worktree's stable index N
-REPO_ROOT               absolute path to this worktree
-FRONTEND_PORT           FRONT_PORT_BASE + N
-BACKEND_PORT            BACK_PORT_BASE  + N
-PORT                    same as the relevant *_PORT (convenience)
-BACKEND_URL             http://localhost:$BACKEND_PORT
-FRONTEND_URL            http://localhost:$FRONTEND_PORT
-FRONTEND_API_BASE_URL   http://localhost:$BACKEND_PORT  (same value as BACKEND_URL)
-DEV_LOG_DIR             this worktree's log dir
-ATE_DB_NAME             this worktree's database name (only when DB_NAME is set)
-```
-
-**Need those values in your own shell or scripts?** `ataegina env` prints exactly
-this environment (plus the DB URL under `DB_URL_VAR` when configured) as eval-able
-shell, so you can pull it into a one-off command, a Makefile, or a `.env` without
-starting anything:
-
-```sh
-eval "$(ataegina env)"          # this tree's ports/URLs/DB now in your shell
-curl "$BACKEND_URL/health"      # e.g. hit the derived backend port
-ataegina env --no-export > .env # or write a sourceable .env (no `export ` prefix)
-```
-
-For a **one-off** command you don't want polluting your shell, `ataegina exec`
-runs it with the same environment injected (and exits with its status):
-
-```sh
-ataegina exec -- pytest                 # tests against this tree's derived ports/DB
-ataegina exec -- psql "$DATABASE_URL"    # open the per-worktree database
-```
-
-**Declarative config (the common case).** Set `FRONTEND_DIR` / `FRONTEND_CMD`
-(and optionally `FRONTEND_ENV`) plus the `BACKEND_*` equivalents in
-`ataegina.config.sh` and ataegina's built-in hooks do the rest: `cd` into the
-directory, export the extra env, and run the command in the background, logged
-to the per-tree log dir. `*_CMD` is a string passed to `sh -c`, so it can
-reference `$FRONTEND_PORT` / `$BACKEND_PORT` / `$BACKEND_URL`. `ataegina init`
-writes this form for you.
+`init` writes a declarative config, and `ataegina config set|get|list|unset|path`
+edits it without a text editor:
 
 ```sh
 FRONTEND_DIR='frontend'
@@ -319,27 +81,29 @@ BACKEND_DIR='backend'
 BACKEND_CMD='uv run uvicorn main:app --port $BACKEND_PORT'
 ```
 
-**Escape hatch (power users).** If your stack needs more than a command string
-(a process manager, docker compose, several processes, a readiness wait),
-define `ate_start_frontend` / `ate_start_backend` (and optionally the matching
-`ate_stop_*`) in `ataegina.config.sh`. A hook you define **overrides** the
-declarative default, so you take full control. See
-`ataegina.config.example.sh` for both forms worked through.
+`*_CMD` is a string passed to `sh -c`, so it can reference `$FRONTEND_PORT`,
+`$BACKEND_PORT` and `$BACKEND_URL`. If your stack needs more than a command
+string, define `ate_start_frontend` / `ate_start_backend` (and the matching
+`ate_stop_*`) in the config — **a hook you define overrides the declarative
+default**. Every key and both forms are worked through in
+[`ataegina.config.example.sh`](ataegina.config.example.sh); `ataegina --help`
+lists them too.
 
-### Per-worktree databases
+`ataegina env` prints this tree's derived environment as eval-able shell, and
+`ataegina exec -- CMD` runs one command with it injected:
 
-Running many worktrees as live stacks collides on the **database** as much as on
-ports: parallel agents stomp each other's schema and data through one shared dev
-DB. Most tools punt on this, or solve it only by going full-container. ataegina
-deconflicts the database on the bare host too.
+```sh
+eval "$(ataegina env)" && curl "$BACKEND_URL/health"
+ataegina exec -- pytest
+```
 
-Set `DB_NAME` and it is on (it is off otherwise, so existing configs are
-unaffected). Each worktree N>0 gets its own database `DB_NAME` + `DB_SUFFIX` + N
-(e.g. `myapp_wt3`); its connection string is built from `DB_URL_TEMPLATE` and
-injected as `DATABASE_URL` (or whatever `DB_URL_VAR` names); and `ataegina up`
-creates it before the backend starts. The **primary** (index 0) keeps the
-unsuffixed `DB_NAME` — your shared dev DB — so only the parallel worktrees fork
-off it.
+## Per-worktree databases
+
+Off unless `DB_NAME` is set. Each worktree `N>0` then gets its own database
+`DB_NAME` + `DB_SUFFIX` + `N` (e.g. `myapp_wt3`), created before the backend
+starts, with its URL injected as `DATABASE_URL` (or whatever `DB_URL_VAR`
+names). The **primary stays on the unsuffixed name** — your shared dev DB — so
+only the parallel worktrees fork off it.
 
 ```sh
 DB_NAME=myapp
@@ -347,235 +111,100 @@ DB_KIND=postgres                                    # postgres | mysql | sqlite
 DB_URL_TEMPLATE='postgres://localhost:5432/$ATE_DB_NAME'
 ```
 
-`down` **never** drops a database, so your data survives a restart. Manage them
-explicitly with `ataegina db [name|url|create|drop]` (dropping the primary's DB
-is refused). Defaults per `DB_KIND` use the standard CLIs (`createdb`/`dropdb`,
-`mysql`, a sqlite file); override with `DB_CREATE_CMD` / `DB_DROP_CMD`, or define
-the `ate_db_create` / `ate_db_drop` hooks to point at a managed provider's branch
-API instead (Neon, PlanetScale, Turso). `$ATE_DB_NAME` is exported into all of
-them.
+`down` never drops a database. Manage them with
+`ataegina db [name|url|create|drop]` (dropping the primary's is refused), or
+define `ate_db_create` / `ate_db_drop` to call a provider's branch API instead.
 
-### Scope-aware startup
+## Scope-aware startup
 
-Most tasks touch only one surface. A worktree that is changing only the
-frontend does not need its own backend process; it can talk to the backend the
-primary checkout is already serving. `ataegina up` uses this to start only what
-a tree needs and point everything else at the shared default servers (frontend
-`FRONT_PORT_BASE`, backend `BACK_PORT_BASE`, the primary's slot).
+A worktree changing only the frontend does not need its own backend — it can use
+the one the primary is already serving. `up` classifies the tree's git diff as
+`frontend`, `backend`, `both` or `none` and starts only what is needed:
 
-**What it detects.** At `up` time, ataegina classifies the worktree's changes
-into a *scope* of `frontend`, `backend`, `both`, or `none`. The signal is a
-sampled git diff: the union of what this branch committed since it forked, the
-staged and unstaged working changes, and untracked files. Each changed path is
-prefix-matched against `FRONTEND_DIR` / `BACKEND_DIR`:
-
-- changes only under `FRONTEND_DIR` -> `frontend`
-- changes only under `BACKEND_DIR` -> `backend`
-- changes under both -> `both`
-- any change *outside* both dirs (shared libs, a schema, root config, a
-  lockfile, CI) -> `both`, conservatively, because such a change can affect
-  either surface and guessing wrong is the expensive failure
-- nothing changed -> `none`
-
-The diff base is resolved in this order: `ATE_BASE_BRANCH` if set; else the
-current branch's upstream (e.g. `origin/dev` via `@{upstream}`); else the remote
-default branch (`refs/remotes/origin/HEAD`, e.g. `origin/dev`); else the first of
-`main` / `master` / `develop` that exists locally. This means a repo whose
-integration branch is not one of the standard names (say prod is `main` but work
-merges into `dev`) still gets the right base. The scope is then the merge-base
-with that ref, so commits that land on the trunk *after* the branch forked do not
-leak in. If no base is resolvable it classifies from the working tree and
-untracked files alone.
-
-**What it starts (the sharing model).**
-
-| scope | starts locally | shares the default |
+| scope | starts locally | shares the primary's |
 |---|---|---|
-| `both` | frontend + backend | nothing (today's behavior) |
-| `frontend` | frontend only | backend -> `localhost:BACK_PORT_BASE` |
-| `backend` | backend only | no frontend started (tests hit the backend directly) |
-| `none` | nothing | uses `:FRONT_PORT_BASE` / `:BACK_PORT_BASE` directly |
+| `both` | frontend + backend | nothing |
+| `frontend` | frontend | backend on `:BACK_PORT_BASE` |
+| `backend` | backend | no frontend started |
+| `none` | nothing | both defaults |
 
-A server can be shared by many clients but a client cannot be split across many
-servers, so a frontend pointing at one shared backend fans out cleanly, while a
-backend-only task simply starts no frontend (use `--scope both` if a UI really
-is needed).
+Anything changed outside both directories resolves to `both`, conservatively.
+Before sharing a backend `up` checks it is actually listening, and starts a
+local one if not. The primary is always `both`. Override per run with
+`--scope frontend|backend|both|none`, or turn detection off with
+`ATE_SCOPE_AUTO=0`.
 
-**The safety rule.** Pointing a frontend at the shared backend is only safe if
-that backend is actually up. Before sharing, `up` checks whether anything is
-listening on `BACK_PORT_BASE`; if nothing is, it logs a warning and falls back
-to starting a local backend on this tree's slot. Worst case you start exactly
-what you would have started anyway.
+ataegina also tells its own processes from strangers: a port held by something
+it did not launch is reported as foreign, so `up` declines rather than implying
+success and `down` leaves it alone unless you pass `--force`.
 
-**The primary is always `both`.** Index 0 (the primary checkout) is the shared
-baseline that the other trees borrow their backend from, so it always resolves
-to `both` (it must serve every surface). A `--scope` flag still overrides even
-on index 0.
+## For agents
 
-**Auto-detected `none` starts `both`.** When `up` *auto-detects* the scope (no
-`--scope`, no `scope:` field) and the diff is empty, the raw scope is `none` --
-but starting nothing in a worktree you just made and are about to work in is
-surprising, so `up` nudges it to `both` and logs a one-line hint
-(`[ate] no changes detected vs <base>; starting both (narrow with --scope)`).
-This nudge applies to the auto-detect path only: an explicit `--scope none` and a
-`scope: none` task field still mean none (start nothing). `doctor` reports the
-raw `none`, annotated `none (auto -> both on 'up')`.
+Every read command speaks JSON, and `up` can block until servers actually
+answer, so a supervisor gates on real state instead of a poll loop.
 
-**Overrides and the toggle.** Scope resolution is, first hit wins:
-
-1. `--scope frontend|backend|both|none` on the command line.
-2. A `scope:` line in `$ATE_TASK_FILE`, if you set that variable.
-3. Auto-detect from the diff (the default).
-4. Fallback `both`.
-
-Auto-detect is on by default. Set `ATE_SCOPE_AUTO=0` to disable it and force
-`both` (the pre-scope behavior). The `up frontend` / `up backend` MODE word
-still acts as a hard limiter intersected with the scope, so `up frontend` never
-starts a backend regardless of what was detected.
-
-**Re-running is additive.** Scope only ever grows (a `none` task becomes
-`frontend`, a `frontend` task becomes `both`) and starting a server is
-idempotent thanks to the `lsof` "already up" guard. There is no teardown:
-re-run `ataegina up` after a task's scope has grown and it starts only the
-newly-needed surface, leaving anything already running untouched.
-
-**It knows its own processes from strangers.** When a slot's port is already
-held, ataegina cross-checks the holder against the pid it recorded at launch
-(start-time verified, so a recycled pid can't fool it). A process it *did* start
-reads as "already up"; a process it *didn't* is named as foreign — `up` declines
-to launch on top of it (instead of implying success), and `down` leaves it alone
-rather than killing an unrelated squatter on the derived port. `down --force`
-(or `ATE_DOWN_FORCE=1`) overrides that when you really do want the slot cleared.
-Ambiguous cases — a port whose pids can't be mapped, or ataegina's own server
-that daemonized and reparented — are treated conservatively as "maybe ours" so
-nothing you launched is ever spared teardown or falsely accused.
-
-### Diagnostics
-
-`ataegina doctor` is a read-only health check for the worktree you run it from.
-It never starts, stops, or writes anything, it just inspects and reports, one
-status line per check with plain `[ok]` / `[warn]` / `[fail]` markers. It is
-safe to run anytime, including in CI: it exits nonzero only on a hard failure
-(such as not being inside a git worktree), while plain warnings leave the exit
-code at zero.
-
-What it checks:
-
-- **Launcher on PATH.** Whether the launcher resolves on your `PATH` under the
-  name you invoked it as (the `ate` symlink counts), or failing that under
-  `ataegina`, plus the version. Warns only if neither resolves (e.g. you ran it
-  via a relative path).
-- **Worktree and registry.** Confirms the resolved index N, the registry path,
-  and whether this tree has a registry entry yet. Warns (and names them) if the
-  registry holds stale entries whose directory is gone, suggesting `prune`.
-- **Config resolution.** Which config file won resolution, or a warning to run
-  `ataegina init` if none was found.
-- **Start config usable.** Per side, whether there is something to start, either
-  a config-defined `ate_start_frontend` / `ate_start_backend` hook or the
-  matching `FRONTEND_CMD` / `BACKEND_CMD`. Warns when a side has nothing.
-- **Detected scope.** What `ataegina up` would resolve for this tree
-  (`frontend` / `backend` / `both` / `none`) via the same scope: / auto-detect
-  chain, so you can see which surfaces would start before starting them.
-- **Port availability.** Whether this tree's frontend and backend slot ports are
-  free, naming the holding process if one is bound (in use is reported
-  neutrally, it may simply be this tree already up).
-- **Frontend port-pin heuristic.** Best-effort warning when the frontend's
-  `package.json` `dev` script pins a port and the configured command still routes
-  through `npm run dev`, so the per-slot port would be ignored.
-- **URLs.** The per-tree frontend, backend, and log paths, same as `ports`.
-
-**Extension hook.** If your `ataegina.config.sh` defines a function named
-`ate_doctor`, `doctor` calls it last, after its own checks, so your stack can add
-its own diagnostics (CORS origins, sidecar reachability, database wiring, and so
-on). It is called with no arguments and inherits the same exported environment
-the start hooks see (`ATE_INDEX`, `FRONTEND_PORT`, `BACKEND_PORT`, `BACKEND_URL`,
-`REPO_ROOT`, `DEV_LOG_DIR`), so it can print its own `[ok]` / `[warn]` lines.
-
-### Configuration keys
-
-Set these in `ataegina.config.sh`:
-
-| Key | Default | Meaning |
-|---|---|---|
-| `FRONT_PORT_BASE` | `5173` | Frontend port = base + N |
-| `BACK_PORT_BASE` | `8000` | Backend port = base + N |
-| `LOG_DIR_BASE` | `/tmp/ate-wt` | Per-tree log dir; index appended |
-| `REGISTRY_DIR` | `$XDG_CONFIG_HOME/ataegina` | Registry root; the per-repo index file lives at `REGISTRY_DIR/repos/<key>` (or set `ATE_REGISTRY` to pin one shared file) |
-| `FRONTEND_DIR` / `BACKEND_DIR` | `.` | Directory (relative to repo root) to run the server in |
-| `FRONTEND_CMD` / `BACKEND_CMD` | (none) | Start command (a `sh -c` string; may use `$FRONTEND_PORT` etc.) |
-| `FRONTEND_ENV` / `BACKEND_ENV` | (none) | Extra `KEY=VALUE` env (one per line or `;`-separated) exported first |
-| `DB_NAME` | (none) | Set to enable per-worktree databases; the feature is off when unset |
-| `DB_KIND` | `postgres` | `postgres` / `mysql` / `sqlite` / `custom`; picks the default create/drop commands |
-| `DB_SUFFIX` | `_wt` | Worktree DB name = `DB_NAME` + `DB_SUFFIX` + N |
-| `DB_URL_TEMPLATE` / `DB_URL_VAR` | (none) / `DATABASE_URL` | Per-tree connection URL (expands `$ATE_DB_NAME`) and the env var it is injected into |
-| `DB_AUTO_CREATE` | `1` | `up` ensures the worktree's DB exists before the backend starts |
-| `DB_CREATE_CMD` / `DB_DROP_CMD` | per `DB_KIND` | Override the create/drop commands (`$ATE_DB_NAME` exported) |
-| `ate_start_frontend` / `ate_start_backend` | declarative | Hooks: define to override the declarative default |
-| `ate_stop_frontend` / `ate_stop_backend` | kill by port + pid | Hooks: define to override the default teardown |
-| `ate_db_create` / `ate_db_drop` | per `DB_KIND` | Hooks: define to override DB create/drop (e.g. a provider branch API) |
-
-## Updating
+![an agent claiming a slot with `ataegina up --wait --json`, then reading the fleet as JSON](docs/agents.gif)
 
 ```bash
-ataegina update          # re-run install.sh against this install
+ataegina up --wait --json && curl "$BACKEND_URL/health"
 ```
 
-`ataegina update` fetches `install.sh` and runs it against the directory the
-running script lives in; `install.sh` resolves the latest release tag, verifies
-its SHA-256 (if a checksum is published), `bash -n` parse-checks the download and
-installs it. It always reinstalls (it is idempotent) and keeps no backup. If the
-feed is unreachable it aborts and leaves your install untouched; set `GH_TOKEN`
-to reach a private feed. ataegina never auto-updates itself.
+`--wait` blocks until every server it launched accepts connections and **exits
+`75`** if any is not ready by the deadline. `status --json` and `ports --json`
+give the same slot shape for one tree, `list --json` gives the whole fleet with
+`stale` / `live` per entry, and `doctor --json` emits
+`{status, summary, checks[]}` with a nonzero exit, so it doubles as a CI gate.
 
-## Shell completion
+## Commands
 
-`ataegina completion <bash|zsh>` prints a completion script (subcommands plus one
-level of common arguments) to stdout. Load it from your shell rc — it needs no
-git worktree, so it works anywhere:
+`ataegina --help` is the full reference, including every flag and env var.
 
-```sh
-# bash (~/.bashrc)
-source <(ataegina completion bash)
+| Command | What it does |
+|---|---|
+| `init` | Detect the stack and write `ataegina.config.sh` |
+| `up [both\|backend\|frontend]` | Start this tree's servers; `--scope`, `--wait[=S]`, `--json` |
+| `down [...] [--force]` | Stop them, reaping the whole process tree |
+| `restart [...]` | `down` then `up` |
+| `logs [...] [-n N]` | Follow this tree's logs |
+| `db [name\|url\|create\|drop]` | Inspect or manage this tree's database |
+| `ports` / `status` / `list` | This tree's slot, its liveness, the whole fleet (all `--json`) |
+| `env` / `exec -- CMD` | Print the derived environment, or run a command with it |
+| `open [frontend\|backend]` | Open the tree's URL in a browser |
+| `move N` / `prune` | Relocate this tree to index `N`; drop entries whose worktree is gone |
+| `doctor` | Read-only diagnostics; nonzero exit on a hard failure (`--json`) |
+| `config <get\|set\|list\|unset\|path>` | Read or change config values |
+| `update` / `completion <bash\|zsh>` | Reinstall the latest release; print a completion script |
 
-# zsh (~/.zshrc, before compinit or via your fpath)
-source <(ataegina completion zsh)
-```
-
-Both `ataegina` and the `ate` alias are completed.
+`ataegina update` re-runs `install.sh` against the directory the running script
+lives in. It never auto-updates. Load completions with
+`source <(ataegina completion bash)`.
 
 ## Requirements
 
-- `bash` (3.2+), `git`, `awk` for the launcher.
-- A port backend for the start guard, stop hooks, doctor, and scope sharing.
-  `lsof` is preferred and is preinstalled on macOS; on a minimal Linux box that
-  lacks it, ataegina falls back to `ss` (iproute2, near-universal), then
-  `fuser`, then a `/proc/net/tcp` parse, auto-detected. Force one with
-  `ATE_PORT_TOOL=lsof|ss|fuser|proc|none`.
-- `curl` or `wget` (either one) for `ataegina update` and `install.sh`. `shasum` or `sha256sum` (either one) to verify checksums.
-- **Windows:** use WSL2 (full support). Git Bash / MSYS2 runs the launcher and
-  `init`, but detached process tracking is unreliable under MSYS; native
-  PowerShell / cmd is not supported. See "Platforms".
+- `bash` 3.2+ (the macOS system shell works as-is), `git`, `awk`.
+- A port backend: `lsof` preferred, falling back to `ss`, `fuser`, or a
+  `/proc/net/tcp` parse, auto-detected. Force one with `ATE_PORT_TOOL`.
+- `curl` or `wget`, and `shasum` or `sha256sum`, for `update` and `install.sh`.
 
-No runtime, no package manager, no build step.
+macOS and Linux are fully supported. On Windows use WSL2; Git Bash / MSYS2 runs
+the bookkeeping and `init` but detached process tracking is unreliable there,
+and native PowerShell / cmd is not supported. No runtime, no package manager, no
+build step.
 
 ## Contributing
 
-Contributions are welcome. ataegina is deliberately small — one bash file, zero
-runtime dependencies, bash 3.2 compatible — and contributions are expected to
-keep it that way. Before opening a pull request, read
-[CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules, the development setup,
-and how to run the test suite (`bats tests/`) and the linter (`shellcheck`).
-Bug reports and feature requests go through the
-[issue templates](https://github.com/noahhyden/ataegina-cli/issues/new/choose).
-Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+Contributions are welcome, and are expected to keep ataegina small: one bash
+file, zero runtime dependencies, bash 3.2 compatible. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules and the test tiers, and
+the [issue templates](https://github.com/noahhyden/ataegina-cli/issues/new/choose)
+for bugs and features. Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 
-ataegina downloads and replaces an executable script during `update`, so its
-integrity story matters. Every download is SHA-256 verified and `bash -n`
-parse-checked, and the config file is sourced bash that runs with your
-privileges — so only run ataegina in repositories you trust. Report a
-vulnerability privately through
+`update` downloads and replaces an executable script, so every download is
+SHA-256 verified and `bash -n` parse-checked. **The config file is sourced bash
+that runs with your privileges — only run ataegina in repositories you trust.**
+Report a vulnerability privately through
 [GitHub security advisories](https://github.com/noahhyden/ataegina-cli/security/advisories/new),
 not a public issue.
 
@@ -591,5 +220,3 @@ asking, and [NOTICE](NOTICE). Fork the code freely; just give your fork its own
 name.
 
 Releases up to and including v1.0.1 keep the MIT terms they shipped under.
-
-ataegina imposes no terms of its own.
