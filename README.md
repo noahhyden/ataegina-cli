@@ -1,6 +1,6 @@
 # ataegina
 
-> Runtime isolation for git worktrees — collision-free ports, processes, **and
+> Runtime isolation for git worktrees - collision-free ports, processes, **and
 > databases** for every worktree, from one zero-dependency bash file. No Docker,
 > no daemon, no YAML.
 
@@ -12,20 +12,20 @@
 
 ![ataegina detecting a stack, then handing each worktree its own collision-free port slot](docs/demo.gif)
 
-Run several AI coding agents in parallel — or just check out three branches of a
-full-stack app — and they all fight over one machine: the same ports, the same
+Run several AI coding agents in parallel - or just check out three branches of a
+full-stack app - and they all fight over one machine: the same ports, the same
 dev server, one shared database they stomp in unison. The usual fixes cost a
 container per environment, a daemon, or a hand-written compose file per project.
 
 ataegina gives every worktree a stable index `N` and derives everything
 collision-free from it:
 
-- **Ports** — frontend `5173+N`, backend `8000+N`, sticky across runs, so
+- **Ports** - frontend `5173+N`, backend `8000+N`, sticky across runs, so
   long-lived agents keep stable addresses.
-- **Database** — its own per-worktree DB, connection string injected, created on
+- **Database** - its own per-worktree DB, connection string injected, created on
   `up`. Deconflicting the database on the bare host is the part that otherwise
   needs a container.
-- **Processes + logs** — detached servers tracked per worktree; `up` / `down` /
+- **Processes + logs** - detached servers tracked per worktree; `up` / `down` /
   `logs` act on exactly this tree's stack.
 
 You keep your own start commands. ataegina does the deconfliction and the
@@ -84,7 +84,7 @@ BACKEND_CMD='uv run uvicorn main:app --port $BACKEND_PORT'
 `*_CMD` is a string passed to `sh -c`, so it can reference `$FRONTEND_PORT`,
 `$BACKEND_PORT` and `$BACKEND_URL`. If your stack needs more than a command
 string, define `ate_start_frontend` / `ate_start_backend` (and the matching
-`ate_stop_*`) in the config — **a hook you define overrides the declarative
+`ate_stop_*`) in the config - **a hook you define overrides the declarative
 default**. Every key and both forms are worked through in
 [`ataegina.config.example.sh`](ataegina.config.example.sh); `ataegina --help`
 lists them too.
@@ -102,7 +102,7 @@ ataegina exec -- pytest
 Off unless `DB_NAME` is set. Each worktree `N>0` then gets its own database
 `DB_NAME` + `DB_SUFFIX` + `N` (e.g. `myapp_wt3`), created before the backend
 starts, with its URL injected as `DATABASE_URL` (or whatever `DB_URL_VAR`
-names). The **primary stays on the unsuffixed name** — your shared dev DB — so
+names). The **primary stays on the unsuffixed name** - your shared dev DB - so
 only the parallel worktrees fork off it.
 
 ```sh
@@ -117,7 +117,7 @@ define `ate_db_create` / `ate_db_drop` to call a provider's branch API instead.
 
 ## Scope-aware startup
 
-A worktree changing only the frontend does not need its own backend — it can use
+A worktree changing only the frontend does not need its own backend - it can use
 the one the primary is already serving. `up` classifies the tree's git diff as
 `frontend`, `backend`, `both` or `none` and starts only what is needed:
 
@@ -203,7 +203,7 @@ for bugs and features. Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 `update` downloads and replaces an executable script, so every download is
 SHA-256 verified and `bash -n` parse-checked. **The config file is sourced bash
-that runs with your privileges — only run ataegina in repositories you trust.**
+that runs with your privileges - only run ataegina in repositories you trust.**
 Report a vulnerability privately through
 [GitHub security advisories](https://github.com/noahhyden/ataegina-cli/security/advisories/new),
 not a public issue.
@@ -215,7 +215,7 @@ LICENSE file is the license.
 
 The name **ataegina**, the name of this repository **ataegina-cli**, the name
 **Noah Hyden**, and the project's logos are trademarks and are *not* covered by
-that licence — see [TRADEMARKS.md](TRADEMARKS.md) for what's fine without
+that licence - see [TRADEMARKS.md](TRADEMARKS.md) for what's fine without
 asking, and [NOTICE](NOTICE). Fork the code freely; just give your fork its own
 name.
 
