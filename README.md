@@ -12,11 +12,6 @@
 
 ![ataegina detecting a stack, then handing each worktree its own collision-free port slot](docs/demo.gif)
 
-Run several AI coding agents in parallel - or just check out three branches of a
-full-stack app - and they all fight over one machine: the same ports, the same
-dev server, one shared database they stomp in unison. The usual fixes cost a
-container per environment, a daemon, or a hand-written compose file per project.
-
 ataegina gives every worktree a stable index `N` and derives everything
 collision-free from it:
 
