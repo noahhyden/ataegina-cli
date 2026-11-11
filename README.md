@@ -200,8 +200,7 @@ not a public issue.
 
 ## License
 
-[Apache License 2.0](LICENSE). There is no EULA and no click-through: the
-LICENSE file is the license.
+[Apache License 2.0](LICENSE).
 
 The name **ataegina**, the name of this repository **ataegina-cli**, the name
 **Noah Hyden**, and the project's logos are trademarks and are *not* covered by
