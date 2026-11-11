@@ -1,7 +1,7 @@
 # ataegina
 
-> Runtime isolation for git worktrees - collision-free ports, processes, **and
-> databases** for every worktree, from one zero-dependency bash file. No Docker,
+> Runtime isolation for git worktrees - collision-free ports, processes, and
+> databases for every worktree. Zero-dependency bash file. No Docker,
 > no daemon, no YAML.
 
 [![CI](https://github.com/noahhyden/ataegina-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/noahhyden/ataegina-cli/actions/workflows/ci.yml)
@@ -33,8 +33,6 @@ bookkeeping. Named after the Lusitanian goddess of rebirth.
 
 ## Install
 
-Never needs `sudo`; it lives under your home directory and writes only there.
-
 ```bash
 brew install noahhyden/tap/ataegina                                              # Homebrew
 curl -fsSL https://raw.githubusercontent.com/noahhyden/ataegina-cli/main/install.sh | sh   # or curl
@@ -43,8 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/noahhyden/ataegina-cli/main/install
 Homebrew installs `ataegina` plus an `ate` shortcut and `brew upgrade` tracks
 releases. The installer puts `ataegina` in `~/.local/bin` (override with
 `ATE_BIN`), verifying its SHA-256 and `bash -n` parse-checking it first; if that
-directory is not on your PATH it prints the line to add, and it never edits your
-rc file for you. For the short name, `alias ate='ataegina'`.
+directory is not on your PATH it prints the line to add. For the short name, `alias ate='ataegina'`.
 
 ## Quickstart
 
@@ -56,7 +53,7 @@ ataegina ports       # show this tree's index + urls
 ```
 
 The primary checkout is index 0; each additional worktree gets the next free
-index, and keeps it across runs:
+index:
 
 ```
 frontend port = FRONT_PORT_BASE + N   (default 5173 + N)
